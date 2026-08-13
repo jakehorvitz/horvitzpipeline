@@ -1,0 +1,4 @@
+.bones/
+.loop/
+*.log
+.DS_Store

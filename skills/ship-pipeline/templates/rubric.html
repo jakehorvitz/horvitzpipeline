@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rubric — {{PROJECT_NAME}}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.55 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0 auto; max-width: 940px; padding: 2rem 1.25rem 5rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  .sub { opacity: .65; margin: 0 0 1.5rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: .55rem .6rem; border-bottom: 1px solid color-mix(in oklch, currentColor 14%, transparent); }
+  th { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; opacity: .7; text-align: left; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
+  input[type=number] { width: 4.5rem; font: inherit; padding: .2rem .35rem; text-align: right; }
+  tfoot td { font-weight: 700; border-top: 2px solid color-mix(in oklch, currentColor 30%, transparent); }
+  .total { font-size: 1.4rem; }
+  .pass { color: seagreen; } .fail { color: tomato; }
+  .pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; background:color-mix(in oklch, gray 22%, transparent); font-size:.8rem; }
+  caption { text-align: left; opacity: .7; font-size: .85rem; margin-bottom: .5rem; }
+</style>
+</head>
+<body>
+  <h1>Rubric — {{PROJECT_NAME}}</h1>
+  <p class="sub">Iteration <span class="pill">{{ITERATION}}</span> · pass threshold <strong>{{PASS_THRESHOLD}}%</strong>. Replace the criteria below with project-specific ones; weights should sum to 100.</p>
+
+  <table id="rubric">
+    <caption>Score each criterion 0–100 for the current build. Weighted total updates live.</caption>
+    <thead>
+      <tr><th>Criterion</th><th>What "100" means</th><th class="num">Weight</th><th class="num">Score 0–100</th><th class="num">Weighted</th></tr>
+    </thead>
+    <tbody>
+      <tr data-w="25"><td>{{CRITERION_1}}</td><td>{{CRITERION_1_BAR}}</td><td class="num">25</td><td class="num"><input type="number" min="0" max="100" value="0"></td><td class="num out">0</td></tr>
+      <tr data-w="25"><td>{{CRITERION_2}}</td><td>{{CRITERION_2_BAR}}</td><td class="num">25</td><td class="num"><input type="number" min="0" max="100" value="0"></td><td class="num out">0</td></tr>
+      <tr data-w="25"><td>{{CRITERION_3}}</td><td>{{CRITERION_3_BAR}}</td><td class="num">25</td><td class="num"><input type="number" min="0" max="100" value="0"></td><td class="num out">0</td></tr>
+      <tr data-w="25"><td>{{CRITERION_4}}</td><td>{{CRITERION_4_BAR}}</td><td class="num">25</td><td class="num"><input type="number" min="0" max="100" value="0"></td><td class="num out">0</td></tr>
+    </tbody>
+    <tfoot>
+      <tr><td colspan="4">Weighted total</td><td class="num total" id="total">0</td></tr>
+      <tr><td colspan="4">Verdict</td><td class="num" id="verdict">—</td></tr>
+    </tfoot>
+  </table>
+
+  <script>
+    const THRESHOLD = Number("{{PASS_THRESHOLD}}") || 90;
+    const rows = [...document.querySelectorAll('#rubric tbody tr')];
+    function recompute() {
+      let total = 0;
+      for (const r of rows) {
+        const w = Number(r.dataset.w);
+        const score = Math.max(0, Math.min(100, Number(r.querySelector('input').value) || 0));
+        const weighted = (w * score) / 100;
+        r.querySelector('.out').textContent = weighted.toFixed(1);
+        total += weighted;
+      }
+      document.getElementById('total').textContent = total.toFixed(1);
+      const v = document.getElementById('verdict');
+      const pass = total >= THRESHOLD;
+      v.textContent = pass ? 'PASS' : 'iterate';
+      v.className = 'num ' + (pass ? 'pass' : 'fail');
+    }
+    document.addEventListener('input', e => { if (e.target.matches('input[type=number]')) recompute(); });
+    recompute();
+  </script>
+</body>
+</html>

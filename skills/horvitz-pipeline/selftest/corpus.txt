@@ -1,0 +1,11 @@
+BYP-01 BLOCK Write(file_path=.bones/state.json)
+BYP-02 BLOCK ls; git push origin main
+BYP-03 BLOCK cd project; git push origin main
+BYP-04 BLOCK PATH_without_jq git push origin main
+BYP-05 BLOCK git push -u o HEAD:main
+BYP-06 BLOCK ssh git@github.com | gh api .../refs/heads/main -X PATCH | curl api.github.com | git push production feature-branch | shell_function{git push origin main}
+BYP-07 BLOCK newhost deploy --prod
+BYP-08 BLOCK git push origin production (production configured protected)
+BYP-09 BLOCK edit signed evidence then bones next
+BYP-10 BLOCK redirect .bones/state.json | bones reset -f | bones init -f
+BYP-14 BLOCK forge stage 1->9 or schema 2->0 while retaining old seal; both guard and bones status reject
