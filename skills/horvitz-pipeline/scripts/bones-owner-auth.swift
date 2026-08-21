@@ -10,7 +10,7 @@
 //   bones-owner-auth pubkey --label <label>                                           -> {"pub_b64":…}
 //   bones-owner-auth sign   --label <label> --pipeline <name> --stage <n> --git-sha <sha>
 //                           --quote-sha <sha256 of the owner quote> --nonce <hex> --ts <unix>
-//                           [--quote <first 60 chars, shown in the prompt>]
+//                           [--quote <first 60 chars, shown in the prompt>] [--policy biometry|presence]
 //                           -> {"payload":"v1|name|stage|git-sha|quote-sha|nonce|ts","sig_b64":…,"pub_b64":…}
 // pub_b64 is the X9.63 uncompressed point (65 bytes); bones.sh wraps it into SPKI PEM for openssl.
 // Exit codes: 0 ok; 2 usage; 3 key error; 4 user cancelled / biometry failed; 5 signing failed.
@@ -91,11 +91,13 @@ case "sign":
   let payload = "v1|\(pipeline)|\(stage)|\(gitSha)|\(quoteSha)|\(nonce)|\(ts)"
   let quote = arg("--quote") ?? ""
   let short = String(gitSha.prefix(12))
+  let policy = arg("--policy") ?? "biometry"
+  let laPolicy: LAPolicy = (policy == "presence") ? .deviceOwnerAuthentication : .deviceOwnerAuthenticationWithBiometrics
   let ctx = LAContext()
   ctx.localizedReason = "Horvitz: authorize promote of \(pipeline) @ \(short) (stage \(stage))" + (quote.isEmpty ? "" : " — \u{201C}\(quote)\u{201D}")
   ctx.localizedCancelTitle = "Refuse"
   var err: NSError?
-  if !ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err) { fail(4, "biometrics unavailable: \(err?.localizedDescription ?? "?")") }
+  if !ctx.canEvaluatePolicy(laPolicy, error: &err) { fail(4, "\(policy) authentication unavailable: \(err?.localizedDescription ?? "?")") }
   guard let key = findKey(ctx) else { fail(3, "no owner key with label \(label) — run setup") }
   var cfErr: Unmanaged<CFError>?
   guard let sig = SecKeyCreateSignature(key, .ecdsaSignatureMessageX962SHA256, payload.data(using: .utf8)! as CFData, &cfErr) else {

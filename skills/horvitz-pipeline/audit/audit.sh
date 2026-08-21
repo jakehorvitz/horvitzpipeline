@@ -70,9 +70,14 @@ if [ -f "$BRAINS_REF" ]; then
   for token in 'Personal Jarvis/Brain' 'AI-Brain' 'hormozi-vault' 'video-brain' 'memory'; do
     grep -q "$token" "$BRAINS_REF" || b1=1
   done
-  for p in "$HOME/Personal Jarvis/Brain" "$HOME/Personal Jarvis/AI-Brain" "$HOME/projects/hormozi-vault" "$HOME/projects/video-brain" "$HOME/.claude/projects/-Users-jakehorvitz-Personal-Jarvis/memory"; do
+  for p in "$HOME/projects/hormozi-vault" "$HOME/projects/video-brain"; do
     [ -d "$p" ] || b1=1
   done
+  # the JARVIS Brain and AI-Brain vaults moved with the workspace rename (Personal Jarvis -> Horvitz Final Folder, 8/16); accept either home
+  [ -d "$HOME/Personal Jarvis/Brain" ] || [ -d "$HOME/Horvitz Final Folder/Brain" ] || b1=1
+  [ -d "$HOME/Personal Jarvis/AI-Brain" ] || [ -d "$HOME/Horvitz Final Folder/AI-Brain" ] || [ -d "$HOME/projects/ai-brain" ] || b1=1
+  # persistent memory dir: the workspace was renamed Personal Jarvis -> Horvitz Final Folder (8/16); accept either
+  [ -d "$HOME/.claude/projects/-Users-jakehorvitz-Horvitz-Final-Folder/memory" ] || [ -d "$HOME/.claude/projects/-Users-jakehorvitz-Personal-Jarvis/memory" ] || b1=1
 fi
 check 100 0 B1 "references/brains.md exists, covers all 5 brains, paths live" $b1
 

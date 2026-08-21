@@ -31,7 +31,7 @@ while IFS= read -r ln; do
   printf '%s' "$act" | grep -qE '^(create|edit|delete)' || creason "Changes action must be create|edit|delete: '$ln'"
   why="$(printf '%s' "$ln" | awk -F' — ' '{print $NF}')"
   hollow_text "$why" && creason "hollow reason on Changes line: '$ln'"
-done < <(sed -n '/^## Changes/,/^## /p' "$f" | grep -vE '^## ' | grep -E '[^[:space:]]')
+done < <(sed -n '/^## Changes/,/^## /p' "$f" | grep -vE '^#' | grep -E '[^[:space:]]')
 [ "$n" -ge 1 ] || creason "Changes section is empty"
 [ "$(ccount "$f" '^[0-9]+\.')" -ge 1 ] || creason "Order needs numbered steps (1. 2. …)"
 ts="$(sed -n '/^## Test seams/,/^## /p' "$f" | grep -vE '^## ' | grep -cE '[^[:space:]]' || true)"

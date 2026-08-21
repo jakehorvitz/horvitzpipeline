@@ -108,7 +108,9 @@ guard_sha() {
 # Seal-on-read (2.0): an unsealed run may still be inspected and healed — allow ONLY a bare
 # `bones.sh status|doctor` (optionally after a cd into the tree); anything else stays blocked.
 if [ "$tool" = "Bash" ] && [ ! -f "$bones/state.sha256" ]; then
-  if printf '%s' "$cmd" | grep -qE '^[[:space:]]*(cd[[:space:]]+[^;&|]+[[:space:]]*&&[[:space:]]*)?(bash[[:space:]]+)?[^[:space:];&|]*bones(\.sh)?[[:space:]]+(status|doctor)[[:space:]]*$'; then
+  # Only literal paths: no $, backticks, parentheses, redirects or chaining may appear anywhere.
+  if printf '%s' "$cmd" | grep -qE '^[[:space:]]*(cd[[:space:]]+["'\'']?[A-Za-z0-9._/~ -]+["'\'']?[[:space:]]*&&[[:space:]]*)?(bash[[:space:]]+)?["'\'']?[A-Za-z0-9._/~-]*bones(\.sh)?["'\'']?[[:space:]]+(status|doctor)[[:space:]]*$' \
+     && ! printf '%s' "$cmd" | grep -qE '[$`();|<>\\]'; then
     exit 0
   fi
 fi
@@ -169,11 +171,16 @@ if [ "$stage" -eq 8 ]; then
     tok="$(sed -n 's/^owner-token:[[:space:]]*//p' "$bones/gates/8-promote.authorized" | head -1)"
     if [ -n "$tok" ] && [ -f "$bones/owner.pub" ] && command -v openssl >/dev/null 2>&1; then
       tgt="$(dirname "$bones")"; head_now="$(git -C "$tgt" rev-parse HEAD 2>/dev/null || printf nogit)"
+      # F-02: the authorization binds the COMMITTED tree. Uncommitted edits outside the audit trail
+      # (.bones/) and build logs (.loop/) make the tree dirty and the authorization unusable.
+      dirty_now=""
+      if [ "$head_now" != nogit ]; then dirty_now="$(git -C "$tgt" status --porcelain 2>/dev/null | grep -vE '^.. (\.bones|\.loop)(/|$)' | head -1)"; fi
       payload="$(printf '%s' "$tok" | jq -r '.payload // empty' 2>/dev/null)"
       sig="$(printf '%s' "$tok" | jq -r '.sig_b64 // empty' 2>/dev/null)"
       pub="$(printf '%s' "$tok" | jq -r '.pub_b64 // empty' 2>/dev/null)"
       IFS='|' read -r tv tn ts th tq tz tt <<<"$payload"
-      if [ "$tv" = "v1" ] && [ "$tn" = "$name" ] && [ "$ts" = "8" ] && [ "$th" = "$head_now" ] && [ -n "$sig" ] && [ -n "$pub" ]; then
+      if [ -n "$dirty_now" ]; then auth_why="working tree has uncommitted changes — commit or stash; 8a binds the committed tree"; fi
+      if [ -z "$dirty_now" ] && [ "$tv" = "v1" ] && [ "$tn" = "$name" ] && [ "$ts" = "8" ] && [ "$th" = "$head_now" ] && [ -n "$sig" ] && [ -n "$pub" ]; then
         gw="$(mktemp -d "${TMPDIR:-/tmp}/bones-guard-auth.XXXXXX")"
         sed -n '/^-----BEGIN PUBLIC KEY-----/,/^-----END PUBLIC KEY-----/p' "$bones/owner.pub" > "$gw/pinned.pem"
         { printf '3059301306072a8648ce3d020106082a8648ce3d030107034200' | xxd -r -p; printf '%s' "$pub" | base64 -d 2>/dev/null; } > "$gw/pub.der"

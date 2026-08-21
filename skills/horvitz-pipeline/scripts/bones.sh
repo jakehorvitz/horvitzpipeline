@@ -381,11 +381,15 @@ owner_token_mint() { # owner_token_mint <stage> <quote> -> OWNER_TOKEN_JSON (exi
   local helper name target head nonce ts qsha out
   helper="$(owner_helper_bin)"; name="$(state_get name)"; target="$(state_get target)"
   head="$(git -C "$target" rev-parse HEAD 2>/dev/null || printf 'nogit')"
+  # F-02: promote authorization binds the COMMITTED tree — refuse while edits outside .bones/.loop are uncommitted.
+  if [ "$1" = 8 ] && [ "$head" != nogit ] && [ -n "$(tree_dirty "$target")" ]; then
+    die "stage 8 authorization binds an exact committed tree and the working tree is dirty ($(tree_dirty "$target" | head -1)) — commit or stash first"
+  fi
   nonce="$(openssl rand -hex 16)"; ts="$(date -u +%s)"
   qsha="$(printf '%s' "$2" | shasum -a 256 | awk '{print $1}')"
   printf '%s|%s\n' "$nonce" "$ts" > "$BONES_DIR/pending-auth"
   printf 'horvitz: owner authorization — Touch ID prompt for %s @ %s (stage %s). Tap to sign, Refuse to decline.\n' "$name" "${head:0:12}" "$1" >&2
-  if ! out="$("$helper" sign --label "$(owner_pin_field owner-label)" --pipeline "$name" --stage "$1" --git-sha "$head" --quote-sha "$qsha" --nonce "$nonce" --ts "$ts" --quote "$(printf '%s' "$2" | cut -c1-60)" 2>/dev/null)"; then
+  if ! out="$("$helper" sign --label "$(owner_pin_field owner-label)" --policy "$(owner_mode)" --pipeline "$name" --stage "$1" --git-sha "$head" --quote-sha "$qsha" --nonce "$nonce" --ts "$ts" --quote "$(printf '%s' "$2" | cut -c1-60)" 2>/dev/null)"; then
     rm -f "$BONES_DIR/pending-auth"
     die "owner authorization did not complete — no signature (Touch ID cancelled or failed, or the helper errored). The gate stays open."
   fi
@@ -400,8 +404,19 @@ owner_auth_recheck() { # owner_auth_recheck <authorized file>; 0 valid, 1 stale/
   [ -n "$tok" ] || { printf 'no owner-token in %s\n' "$f" >&2; return 1; }
   name="$(state_get name)"; target="$(state_get target)"
   head="$(git -C "$target" rev-parse HEAD 2>/dev/null || printf 'nogit')"
+  if [ "$head" != nogit ] && [ -n "$(tree_dirty "$target")" ]; then
+    printf '8a authorization binds the committed tree and the working tree is dirty (%s) — commit or stash\n' "$(tree_dirty "$target" | head -1)" >&2; return 1
+  fi
   if err="$( ( owner_token_verify "$tok" "$name" 8 "$head" "" recheck ) 2>&1 )"; then return 0; fi
   printf '%s\n' "$err" >&2; return 1
+}
+# Dirty = uncommitted changes outside the audit trail (.bones/) and build logs (.loop/).
+tree_dirty() { git -C "$1" status --porcelain 2>/dev/null | grep -vE '^.. (\.bones|\.loop)(/|$)' | head -3; }
+# Evidence paths are pinned ABSOLUTE so doctor/next re-hash them from any cwd; older relative
+# records are resolved against the target as a fallback.
+abs_path() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "$(cd "$(dirname "$1")" 2>/dev/null && pwd)" "$(basename "$1")" ;; esac; }
+resolve_evidence() { # resolve_evidence <path> <target> -> existing path (or the input)
+  if [ -e "$1" ]; then printf '%s\n' "$1"; elif [ -e "$2/$1" ]; then printf '%s/%s\n' "$2" "$1"; else printf '%s\n' "$1"; fi
 }
 
 # LLM substance check: shape checks (grep) catch missing structure; this catches
@@ -715,10 +730,14 @@ cmd_approve() {
   fi
 
   # Evidence: every -e must exist; record path + sha256.
-  local ev_lines="" f
+  local ev_lines="" f i
   if [ ${#evidence[@]} -gt 0 ]; then
+    i=0
+    while [ "$i" -lt ${#evidence[@]} ]; do
+      [ -e "${evidence[$i]}" ] || die "evidence file not found: ${evidence[$i]}"
+      evidence[$i]="$(abs_path "${evidence[$i]}")"; i=$((i+1))
+    done
     for f in "${evidence[@]}"; do
-      [ -e "$f" ] || die "evidence file not found: $f"
       ev_lines="${ev_lines}evidence: $f (sha256:$(sha_of "$f"))
 "
     done
@@ -761,6 +780,7 @@ cmd_plan() {
   local note="${*:-}"
   [ -n "$plan" ] || die "plan needs -e <plan.md> — architecture, file-level changes, order, test seams, acceptance map (contracts/plan.sh)"
   [ -f "$plan" ] || die "plan file not found: $plan"
+  plan="$(abs_path "$plan")"
   case "$(printf '%s' "$note" | tr '[:upper:]' '[:lower:]')" in
     ""|approved|approve|ok|done|lgtm|yes|plan|planned) die "note too thin — say what the plan commits to" ;;
   esac
@@ -800,7 +820,8 @@ cmd_confirm() {
   local auth="$BONES_DIR/gates/8-promote.authorized"
   [ -f "$auth" ] || die "8b needs 8a first: no owner authorization on record — bones approve -q \"<Jake's words>\" \"<note>\" (Touch ID)"
   [ ${#evidence[@]} -ge 1 ] || die "confirm needs -e <smoke record> (smoke-target / smoke-result / smoke-at, per contracts/smoke.sh)"
-  local f; for f in "${evidence[@]}"; do [ -e "$f" ] || die "evidence file not found: $f"; done
+  local f i=0; for f in "${evidence[@]}"; do [ -e "$f" ] || die "evidence file not found: $f"; done
+  while [ "$i" -lt ${#evidence[@]} ]; do evidence[$i]="$(abs_path "${evidence[$i]}")"; i=$((i+1)); done
   local at; at="$(sed -n 's/^authorized-at:[[:space:]]*//p' "$auth" | head -1)"
   owner_auth_recheck "$auth" || die "8b refused: the 8a authorization is no longer valid for the current HEAD — roll back the extra commit, or bones back -s 8 and authorize again"
   if [ "$failed" -eq 1 ]; then
@@ -1523,7 +1544,7 @@ selftest_pin_plan() {
 selftest_owner_workspace() {
   local w; w="$(mktemp -d "${TMPDIR:-/tmp}/bones-owner-ws.XXXXXX")"; w="$(cd "$w" && pwd)"
   mkdir -p "$w/project" "$w/helper"
-  ( cd "$w/project" && git init -q && git -c user.email=s@t -c user.name=selftest commit -q --allow-empty -m init ) >/dev/null 2>&1
+  ( cd "$w/project" && git init -q && printf '.bones/\n.loop/\n' > .gitignore && git add .gitignore && git -c user.email=s@t -c user.name=selftest commit -q -m init ) >/dev/null 2>&1
   "$SELF" init -t "$w/project" -n selftest -c true -S >/dev/null 2>&1
   openssl ecparam -name prime256v1 -genkey -noout -out "$w/helper/test-key.pem" 2>/dev/null
   cat > "$w/helper/bones-owner-auth-test" <<'HEOF'
@@ -1566,6 +1587,10 @@ selftest_promote_split() {
   (cd "$p" && BONES_GUARD_SH="$GUARD_SH" "$SELF" approve -q "go" "selftest: promote authorized with the selftest key" >/dev/null 2>&1) || { ps_fail 3 "approve with a valid owner token failed"; return 1; }
   [ -f "$p/.bones/gates/8-promote.authorized" ] || { ps_fail 3 "no 8-promote.authorized written"; return 1; }
   [ "$(guard_rc "$(guard_json Bash "$p" "git push origin main")")" = 0 ] || { ps_fail 4 "guard still blocks after a valid 8a"; return 1; }
+  printf 'uncommitted payload\n' > "$p/dirty.txt"
+  [ "$(guard_rc "$(guard_json Bash "$p" "git push origin main")")" = 2 ] || { ps_fail 4b "guard lifted with uncommitted changes in the tree (F-02)"; return 1; }
+  mv "$p/dirty.txt" "$w/dirty.txt"
+  [ "$(guard_rc "$(guard_json Bash "$p" "git push origin main")")" = 0 ] || { ps_fail 4b "guard did not re-lift after the tree was clean again"; return 1; }
   ( cd "$p" && git -c user.email=s@t -c user.name=selftest commit -q --allow-empty -m more ) >/dev/null 2>&1
   [ "$(guard_rc "$(guard_json Bash "$p" "git push origin main")")" = 2 ] || { ps_fail 5 "guard did not block after HEAD moved"; return 1; }
   selftest_smoke_record "$w/smoke-good.md" PASS
@@ -1581,7 +1606,7 @@ selftest_promote_split() {
   [ "$(json_get "$p/.bones/state.json" stage)" = "9" ] || { ps_fail 9 "stage is not 9 after next"; return 1; }
   [ -f "$p/.bones/operate-due" ] || { ps_fail 9 "operate clock not started after next from 8"; return 1; }
   rm -rf "$w"
-  printf 'promote-split PASS (9 steps: blocked → no-key refused → authorized → allowed → HEAD moved: blocked + confirm refused → next refused → FAIL smoke refused → confirmed → next + clock)\n'
+  printf 'promote-split PASS (10 steps: blocked → no-key refused → authorized → allowed → dirty tree blocked → HEAD moved: blocked + confirm refused → next refused → FAIL smoke refused → confirmed → next + clock)\n'
 }
 
 selftest_contracts() {
@@ -1740,7 +1765,10 @@ selftest_unsealed_status() {
   [ "$(guard_rc "$(guard_json Bash "$p" "ls")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed ls on an unsealed run\n'; rm -rf "$w"; return 1; }
   [ "$(guard_rc "$(guard_json Bash "$p" "git push origin main")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed a push on an unsealed run\n'; rm -rf "$w"; return 1; }
   [ "$(guard_rc "$(guard_json Bash "$p" "bash $SELF status; git push origin main")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed a chained push behind status\n'; rm -rf "$w"; return 1; }
-  rm -rf "$w"; printf 'unsealed-status PASS (status/doctor allowed to self-heal; ls, push, and chained commands still blocked)\n'
+  [ "$(guard_rc "$(guard_json Bash "$p" "cd /tmp/\$(touch /tmp/pwned) && bash $SELF status")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed command substitution in the cd clause (F-01)\n'; rm -rf "$w"; return 1; }
+  [ "$(guard_rc "$(guard_json Bash "$p" "\`touch /tmp/pwned\` bash $SELF status")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed a backtick prefix (F-01)\n'; rm -rf "$w"; return 1; }
+  [ "$(guard_rc "$(guard_json Bash "$p" "bash $SELF status > /tmp/x")")" = 2 ] || { printf 'unsealed-status FAIL guard allowed a redirect on the carve-out\n'; rm -rf "$w"; return 1; }
+  rm -rf "$w"; printf 'unsealed-status PASS (status/doctor allowed to self-heal; ls, push, chained commands, command substitution, backticks and redirects still blocked)\n'
 }
 
 # upgrade (2.0): schema-null (sealed and unsealed) and schema-2 fixtures at stages 3, 8, 9 keep working.
@@ -1852,6 +1880,7 @@ cmd_next() {
   while IFS= read -r ln; do
     path="$(printf '%s' "$ln" | sed -E 's/^evidence: (.*) \(sha256:[a-f0-9-]+\)$/\1/')"
     want="$(printf '%s' "$ln" | sed -E 's/^.*\(sha256:([a-f0-9-]+)\)$/\1/')"
+    path="$(resolve_evidence "$path" "$target")"
     [ -e "$path" ] || die "evidence integrity check failed: signed-off file is missing: $path"
     got="$(sha_of "$path")"
     [ "$got" = "$want" ] || die "evidence integrity check failed: $path changed after sign-off (expected $want, actual $got). Refusing to advance."
@@ -2048,6 +2077,7 @@ cmd_doctor() {
   while IFS= read -r ln; do
     path="$(printf '%s' "$ln" | sed -E 's/^evidence: (.*) \(sha256:[a-f0-9-]+\)$/\1/')"
     want="$(printf '%s' "$ln" | sed -E 's/^.*\(sha256:([a-f0-9-]+)\)$/\1/')"
+    path="$(resolve_evidence "$path" "$target")"
     if [ ! -e "$path" ]; then
       printf ' WARN evidence file GONE since sign-off: %s\n' "$path"; issues=$((issues+1))
     else
