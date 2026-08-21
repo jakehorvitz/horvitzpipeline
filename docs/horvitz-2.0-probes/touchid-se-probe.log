@@ -1,0 +1,18 @@
+compile: 2026-08-21T20:35:30Z
+compile rc=
+codesign:
+Identifier=touchid-se-probe
+CodeDirectory v=20400 size=585 flags=0x20002(adhoc,linker-signed) hashes=15+0 location=embedded
+Signature=adhoc
+run:
+1a canEvaluate(biometrics): true 
+1b canEvaluate(deviceOwnerAuthentication): true 
+1c biometryType raw: 1 (1=touchID 2=faceID 0=none)
+2a SE ephemeral key create: OK
+2b SE sign (no ACL, no prompt): OK, 71 bytes DER
+2c verify with SE public key: true
+2d public key export (X9.63): 65 bytes -> openssl-verifiable
+3a ACL(privateKeyUsage+biometryCurrentSet): OK
+3b SE key WITH biometry ACL create (ephemeral, no prompt at creation): OK  [signing with it would prompt Touch ID — not done here]
+probe done
+run rc=0

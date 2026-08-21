@@ -1,0 +1,13 @@
+probe2: 2026-08-21T20:38:47Z
+dumped msg.txt (59B) sig.der (72B) pub.x963 (65B)
+openssl: OpenSSL 3.6.3 9 Jun 2026 (Library: OpenSSL 3.6.3 9 Jun 2026)
+tools: xxd=/usr/bin/xxd base64=/usr/bin/base64
+SPKI wrap -> PEM: OK
+-----BEGIN PUBLIC KEY-----
+verify (good):
+Verified OK
+rc=0
+verify (tampered payload, must fail):
+809E3AF901000000:error:030000EA:digital envelope routines:EVP_DigestVerifyFinal:provider signature failure:crypto/evp/m_sigver.c:707:ECDSA digest_verify_final:
+Verification failure
+rc=1
