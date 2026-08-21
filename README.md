@@ -15,11 +15,11 @@ Built for Claude Code (both folders drop into `~/.claude/skills/`), but the stat
 | 2 | Kill-or-commit | **owner** | verbatim human quote |
 | 3 | Spec sign-off (HTML spec + spec-time API validation) | **owner** | verbatim human quote |
 | 4 | Council / second-pass critique | agent | evidence-checked |
-| 5 | Build loop | **auto** | acceptance command exit code, independently re-run |
+| 5 | Plan artifact (contract + judge) → build loop | **auto** | pinned plan, then acceptance command exit code, independently re-run |
 | 5.5 | Spec-conformance check (anti-drift) | evidence for 6 | conformance report |
 | 6 | Adversarial review + risk-triggered security | agent | evidence-checked |
 | 7 | Staging validation (e2e + click-through) | agent | two artifacts required |
-| 8 | Promote + production smoke test | **owner** | verbatim human quote |
+| 8 | Promote: 8a authorize (owner token, Touch ID, bound to HEAD) → 8b confirm (smoke record) | **owner** + agent | signed token + smoke contract |
 | 9 | Present | step | none |
 | 10 | Operate + learn (7-day clock) | **owner** | verbatim human quote |
 
@@ -63,3 +63,53 @@ bones.sh status      # which gate is open, and exactly what satisfies it
 ## Knowledge layer
 
 `ship-pipeline/references/brains.md` wires personal knowledge vaults into stage 1 (recon before any web search) and stage 10 (learnings written back). Swap the table for your own knowledge bases; the pattern is the point: consult before building, write back after operating.
+
+## 2.0: what changed
+
+Horvitz 2.0 closes four defects found in review (thanks to Bones Ijeoma) with mechanical,
+selftest-proven enforcement:
+
+1. **Stage 8 is two-phase.** `bones approve` at 8 is *authorize* — the owner's verbatim words plus
+   a Touch-ID-signed token bound to the current git HEAD; the guard lifts its push/deploy rules only
+   while HEAD equals the authorized sha. Deploy and smoke happen next, then `bones confirm` with a
+   smoke record (8b) stamps the gate; only `bones next` after that starts the 7-day operate clock.
+2. **Evidence contracts.** Stages 4, 6, 7, the plan, and the smoke record are validated by
+   executable contracts in `skills/horvitz-pipeline/contracts/` — required fields, id parity with the
+   signed spec, real screenshot bytes and dimensions, hollow-evidence refusal — not by keyword greps.
+3. **A plan artifact before the build.** `bones plan` pins architecture, file-level changes,
+   order, test seams, and an acceptance map; `bones build` refuses without it and hands it to the
+   builder. Deviations are logged and must be cited at review.
+4. **Real owner authentication.** The `[ -t 0 ]` TTY check is gone. Production approval is a
+   one-tap Secure-Enclave signature (`bones owner-setup` once per machine); the helper binary's
+   hash and code signature are pinned; tokens are one-use and time-boxed; openssl verifies them in
+   `bones.sh` and in the guard. Machines without Touch ID can opt into a passphrase key that is
+   labeled DEGRADED everywhere.
+
+Nothing renumbers or renames; the state schema stays at 2; `MIGRATION.md` is the install path.
+
+## Orchestrator vs skills
+
+Bones's thesis — *keep the orchestrator thin; it should track artifact paths, hashes, dependencies,
+and the next transition, and policy should live in composable skills* — is the direction of 2.0.
+Slice A (this release) moved the *enforcement* of stage policy out of prose and into contracts the
+orchestrator calls by name, and made the plan an artifact the orchestrator pins like any other.
+Slice B (next) thins `bones.sh` further: stage briefs become `## Produces` blocks in five skills
+(`specify`, `goalify`, `planify`, `implementify`, `reviewify`), `bones artifacts` lists every pinned
+artifact with its hash and verification state, and the other twelve skills Bones named are
+documented as context-activated helpers, never mandatory stages.
+
+## Residual risks (disclosed)
+
+- **R1** Any process running as the owner can *request* the Touch ID prompt; a careless tap
+  authorizes. The prompt names the pipeline, short HEAD, and the first 60 characters of the quote;
+  tokens are nonce-bound, time-boxed, one-use, and stale the moment HEAD moves.
+- **R2** A compromise of the owner's login session at keychain level is out of scope; the
+  Secure-Enclave key still cannot sign without biometry.
+- **R3** Macs without Touch ID fall back to a passphrase key: a typed approval, marked DEGRADED.
+- **R4** The guard remains regex-over-Bash; a determined agent can write a program that shells out,
+  or patch the guard itself under the same uid. Helper pinning narrows, but cannot close, that class.
+- **R5** Skill shapes for Slice B were designed from Bones's descriptions until his repo is readable.
+- **R6** "No skill becomes a stage" is true, and still the contracts and the plan gate are new
+  mandatory policy surfaces. Said plainly rather than implied away.
+- **R7** Steady-state friction is one tap per promote; the one-time migration is more (owner-setup,
+  fleet pin-owner, fleet repin, fleet doctor) — scripted and journaled, but not "one tap".

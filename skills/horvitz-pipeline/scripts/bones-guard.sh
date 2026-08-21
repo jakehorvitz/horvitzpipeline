@@ -10,7 +10,12 @@
 #         mention .bones paths; writes/deletes/redirects are blocked (a forged
 #         gate file is worse than a skipped gate). `bones reset` is Jake's call
 #         from his own terminal (hooks only bind the agent's Bash tool, not his).
-#   PRE-PROMOTE (stage 1..8):
+#   SEAL-ON-READ (2.0): a run whose state.sha256 is missing lets ONLY a bare
+#     `bones.sh status|doctor` through (so it can re-seal itself); everything else blocks.
+#   STAGE 8 (2.0): a VALID owner token in gates/8-promote.authorized — signed by the
+#     pinned owner key (.bones/owner.pub) and bound to the CURRENT git HEAD — lifts the
+#     pre-promote rules below (8a authorized). Anything else at stage 8 is blocked like 1..7.
+#   PRE-PROMOTE (stage 1..8, unless 8a-authorized for the current HEAD):
 #     G1. git push ALLOWLIST — a push passes ONLY as `git push [flags] <remote>
 #         <branch>` with an explicit non-main/master branch, no force, no
 #         delete, no colon refspec. Everything else (bare push, HEAD:main,
@@ -83,10 +88,11 @@ done
 
 stage="?"
 name="?"
+auth_why=""
 
 block() { # block <rule> <why>
   printf 'bones-guard: BLOCKED [%s]. Pipeline "%s" is at stage %s/10. %s Run `bones status` for the open gate. Do NOT reword the command to get around this guard — that is gate evasion and it goes on the record.\n' \
-    "$1" "$name" "$stage" "$2" >&2
+    "$1" "$name" "$stage" "$2${auth_why:+ ($auth_why)}" >&2
   exit 2
 }
 
@@ -99,6 +105,13 @@ guard_sha() {
 # Never make an allow/block decision from unsealed state. Otherwise changing
 # stage 5 to stage 9 disables every pre-promote rule even though bones status
 # correctly rejects the same forgery.
+# Seal-on-read (2.0): an unsealed run may still be inspected and healed — allow ONLY a bare
+# `bones.sh status|doctor` (optionally after a cd into the tree); anything else stays blocked.
+if [ "$tool" = "Bash" ] && [ ! -f "$bones/state.sha256" ]; then
+  if printf '%s' "$cmd" | grep -qE '^[[:space:]]*(cd[[:space:]]+[^;&|]+[[:space:]]*&&[[:space:]]*)?(bash[[:space:]]+)?[^[:space:];&|]*bones(\.sh)?[[:space:]]+(status|doctor)[[:space:]]*$'; then
+    exit 0
+  fi
+fi
 [ -f "$bones/state.sha256" ] || block "state-integrity" "state.sha256 is missing; refusing to trust an unsealed stage."
 want_state="$(head -1 "$bones/state.sha256" 2>/dev/null | awk '{print $1}')"
 got_state="$(guard_sha "$bones/state.json" 2>/dev/null)" || block "state-integrity" "No sha256 tool is available to verify state."
@@ -146,8 +159,40 @@ if [ "$stage" -le 10 ]; then
   fi
 fi
 
+# ---- 8a authorization (2.0): at stage 8 a VALID owner token bound to the current HEAD lifts
+#      the promote rules (G1/D1/D2). Anything else at stage 8 is blocked exactly like stages 1..7.
+auth_ok=0
+if [ "$stage" -eq 8 ]; then
+  auth_why="no 8a authorization on record — bones approve (Touch ID) first"
+  if [ -f "$bones/gates/8-promote.authorized" ]; then
+    auth_why="8a authorization invalid or STALE (HEAD moved since the tap) — re-authorize"
+    tok="$(sed -n 's/^owner-token:[[:space:]]*//p' "$bones/gates/8-promote.authorized" | head -1)"
+    if [ -n "$tok" ] && [ -f "$bones/owner.pub" ] && command -v openssl >/dev/null 2>&1; then
+      tgt="$(dirname "$bones")"; head_now="$(git -C "$tgt" rev-parse HEAD 2>/dev/null || printf nogit)"
+      payload="$(printf '%s' "$tok" | jq -r '.payload // empty' 2>/dev/null)"
+      sig="$(printf '%s' "$tok" | jq -r '.sig_b64 // empty' 2>/dev/null)"
+      pub="$(printf '%s' "$tok" | jq -r '.pub_b64 // empty' 2>/dev/null)"
+      IFS='|' read -r tv tn ts th tq tz tt <<<"$payload"
+      if [ "$tv" = "v1" ] && [ "$tn" = "$name" ] && [ "$ts" = "8" ] && [ "$th" = "$head_now" ] && [ -n "$sig" ] && [ -n "$pub" ]; then
+        gw="$(mktemp -d "${TMPDIR:-/tmp}/bones-guard-auth.XXXXXX")"
+        sed -n '/^-----BEGIN PUBLIC KEY-----/,/^-----END PUBLIC KEY-----/p' "$bones/owner.pub" > "$gw/pinned.pem"
+        { printf '3059301306072a8648ce3d020106082a8648ce3d030107034200' | xxd -r -p; printf '%s' "$pub" | base64 -d 2>/dev/null; } > "$gw/pub.der"
+        if openssl pkey -pubin -inform DER -in "$gw/pub.der" -outform PEM -out "$gw/pub.pem" >/dev/null 2>&1 \
+           && [ -s "$gw/pinned.pem" ] \
+           && [ "$(openssl pkey -pubin -in "$gw/pub.pem" -outform DER 2>/dev/null | shasum -a 256 | awk '{print $1}')" = "$(openssl pkey -pubin -in "$gw/pinned.pem" -outform DER 2>/dev/null | shasum -a 256 | awk '{print $1}')" ] \
+           && printf '%s' "$sig" | base64 -d > "$gw/sig.der" 2>/dev/null && printf '%s' "$payload" > "$gw/payload" \
+           && openssl dgst -sha256 -verify "$gw/pinned.pem" -signature "$gw/sig.der" "$gw/payload" >/dev/null 2>&1; then
+          auth_ok=1; auth_why=""
+        fi
+        rm -rf "$gw"
+      fi
+    fi
+  fi
+fi
 # Past the promote gate (stage 9+): promote-shaped commands are legitimate.
 [ "$stage" -le 8 ] || exit 0
+# 8a authorized for the CURRENT head: promote-shaped commands are legitimate.
+[ "$auth_ok" -eq 1 ] && exit 0
 
 # ---- G1: git push allowlist --------------------------------------------------
 if printf '%s' "$cmd" | grep -qE '(^|[;&|({][[:space:]]*)git([[:space:]]+-[Cc][[:space:]]+[^[:space:]]+)?[[:space:]]+push([[:space:]]|$)'; then

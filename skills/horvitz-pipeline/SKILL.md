@@ -17,7 +17,7 @@ Read `ship-pipeline/SKILL.md` for what each stage *does* and why. This skill is 
 
 | Type | Meaning | Satisfied by |
 |------|---------|--------------|
-| **owner** | Jake's call, not yours | `approve -q "<his verbatim words>" "<note>"` — the script refuses without a quote |
+| **owner** | Jake's call, not yours | `approve -q "<his verbatim words>" "<note>"` — the script refuses without a quote; at stage 8a (promote) it also mints his **Touch-ID-signed token** bound to HEAD (strict mode: at every owner gate) |
 | **agent** | your judgment call | `approve [-e <evidence_file>]... "<substantive note>"` — thin notes ("approved", "done") are rejected |
 | **auto** | machine-verified | `bones build -c "<cmd>" …` → loop.sh exit 0, then Horvitz independently re-runs the pinned command and also requires exit 0. `-c` is required; `approve` is rejected here. Builds with **prime-agent by default**; `-B codex\|prime\|auto` overrides — the builder never changes who holds the gate |
 | **step** | no gate | `next` advances and records the step |
@@ -50,10 +50,18 @@ worse than a skipped gate.
 | "He redirected me, that's basically approval" | A redirect that changes scope = `bones back` to the stage it invalidates, not an approve. |
 | "The work is genuinely done, the gate is a formality" | Done-ness is what *agent/auto* gates check. Owner gates check *consent*. |
 
-**Strict mode is the DEFAULT** (since 7/16): owner gates require a real TTY — Jake
-types the approve himself; an agent shell physically cannot. At an owner gate, `nudge`
-him with the exact `approve -q` command to run, then stop. `init -S` (soft mode) is the
-opt-out for low-stakes runs where agent-recorded quotes are acceptable — Jake's call.
+**Owner authentication (2.0):** the old "real TTY" check is gone — a pseudo-TTY proves
+nothing. Promote (stage 8a) ALWAYS needs the owner's signed token: `approve` prompts Touch ID
+through a pinned helper whose Secure-Enclave key cannot sign without the owner's finger; the
+token is bound to the pipeline, stage, git HEAD, a nonce, and a 10-minute window, is one-use,
+and is verified by openssl in `bones.sh` and again by the guard on every promote-shaped
+command. The helper binary's sha256 + cdhash are pinned next to the key; a swapped helper
+cannot even raise the prompt. Strict mode (`init -H` / `mode -H`) requires the token at every
+owner gate (2, 3, 8, 10); soft mode (`init -S`, Jake's default) requires it at promote only and
+records his chat words for the others. One-time per machine: `bones owner-setup` (one tap),
+then `bones owner-pin` per run (`scripts/fleet.sh pin-owner` for all). No Touch ID?
+`owner-setup --passphrase --accept-degraded`, and status/doctor print
+`owner-auth: passphrase (DEGRADED)`.
 
 ## How to drive it
 
@@ -68,6 +76,11 @@ bones.sh approve [-q "<quote>"] [-e <file>]... "<note>"   # satisfy current owne
 bones.sh build -c "<pinned_acceptance_cmd>" -s <spec.html> [-r rubric] [-B codex|prime|auto] [-R auto|codex|gemini|prime]
                                                # stage 5 only; -c must match init; Horvitz independently re-runs it before opening the gate
                                                # builds with prime-agent by DEFAULT (no -B needed); BONES_BUILDER=codex changes the default
+bones.sh plan -e <plan.md> "<note>"              # stage 5, BEFORE build: pin the validated plan (contracts/plan.sh + LLM judge)
+bones.sh confirm [--failed] -e <smoke record> "<note>"   # stage 8b: smoke contract → 8-promote.ok; next then starts the 7-day clock
+bones.sh owner-setup [--policy biometry|presence] [--passphrase --accept-degraded] [--reset]
+                                               # one-time per machine: Touch ID / Secure-Enclave owner key + helper pin (one tap)
+bones.sh owner-pin [--rotate]                   # pin ~/.bones-owner/owner.pub (+ helper hash/cdhash) into this run's .bones
 bones.sh license --check <signed-key>           # offline Ed25519 verification; valid Pro keys exit 0, tampered keys fail closed
 bones.sh package [-s giftcandidate] [-o bones-package.tar.gz] [-a allowlist]
                                                # fail-closed privacy scan, then archive manifest-listed files
@@ -124,6 +137,11 @@ commands that `cd` into the gated tree:
 - **Audit-trail tamper protection (any active stage):** direct writes to `.bones/`
   (redirects, rm, sed -i, forged gate files) and agent-run `bones reset` are blocked.
   Only bones.sh writes the record; reads (cat/ls/grep) stay open.
+- **8a lift (stage 8, 2.0):** a valid owner token in `gates/8-promote.authorized`, signed by
+  the pinned key and bound to the CURRENT git HEAD, lifts the push/deploy rules; a new commit
+  makes it stale and the rules return. The guard re-verifies the signature with openssl itself.
+- **Seal-on-read (2.0):** a run whose `state.sha256` is missing lets only a bare
+  `bones status|doctor` through (so it can heal itself); everything else stays blocked.
 
 Getting blocked means: finish the open gates. Do not reword the command around the
 guard — evasion attempts go on the record. `BONES_GUARD=off` exists for non-pipeline
@@ -157,12 +175,14 @@ packaged (the secret scanner refuses those paths — do not allowlist around it)
 |---|-------|------|---|-------|------|
 | 1 | Brainstorm + interrogation | agent | 6 | Adversarial review + security | agent |
 | 2 | Kill-or-commit | **owner** | 7 | Staging validation | agent |
-| 3 | Spec sign-off | **owner** | 8 | Promote + prod smoke | **owner** |
+| 3 | Spec sign-off | **owner** | 8 | Promote: 8a authorize (token) → 8b confirm (smoke contract) | **owner** + agent |
 | 4 | Council / critique | agent | 9 | Present | step |
 | 5 | Build loop | **auto** | 10 | Operate + learn | **owner** |
 
-Evidence on stages 1, 3, 6, 7 is **enforced, not suggested** — `approve` refuses
-without it: stage 1 needs an interrogation record with all 7 dimensions banded AND a
+Evidence on stages 1, 3, 4, 6, 7 — plus the plan before 5 and the smoke record at 8b — is
+**enforced, not suggested**: `approve`/`plan`/`confirm` refuse without it, and stages 4, 6, 7,
+plan and smoke are validated by executable **contracts** in `contracts/` (see below), not by
+keyword greps. In detail: stage 1 needs an interrogation record with all 7 dimensions banded AND a
 rubric `score: NN/100` (the interrogation loops until ≥85 — the score is the stop
 condition, per ship-pipeline/references/prompt-interrogation.md), stage 3 an HTML spec
 containing an acceptance checklist AND an API-validation record (live curl probes of
@@ -188,6 +208,49 @@ AND the 7-dimension prompt interrogation
 banded covered/partial/missing, gap questions asked, answers folded back in. Write the
 interrogation record to a file and approve with `-e <file>`; the tightened prompt is
 what stage 3's spec is built from.
+
+## Stage 8 is two-phase (2.0)
+
+`approve` at stage 8 is **8a — authorize**: Jake's verbatim words + his Touch ID token, bound
+to the current HEAD. It writes `gates/8-promote.authorized`; the guard then allows
+promote-shaped commands **while HEAD equals the authorized sha** (a new commit stales it —
+re-authorize). Deploy, run the production smoke, then **8b — confirm**:
+`bones confirm -e <smoke record> "<note>"` (`smoke-target:`, `smoke-result: PASS`,
+`smoke-at:` later than 8a, per `contracts/smoke.sh`) writes `gates/8-promote.ok`;
+`bones confirm --failed -e <record> "<note>"` journals a failed smoke and leaves 8b open.
+Only `bones next` after 8b starts the 7-day operate clock; `next` and `confirm` re-verify the
+8a token against HEAD. Gate files are written atomically and never overwritten
+(single-writer); `back -s 8` clears both. Runs promoted before 2.0 (an `8-promote.ok` with no
+`.authorized`) are labeled "promoted pre-2.0" by `doctor`, never warned.
+
+## The plan artifact (2.0)
+
+Between the signed spec and the build loop: `bones plan -e docs/plan.md "<note>"` — sections
+`## Architecture`, `## Changes` (path — create|edit|delete — why), `## Order`, `## Test seams`,
+`## Acceptance map` (every `AC-nn` of the signed spec → step). `contracts/plan.sh` checks it
+mechanically (id parity with the signed spec, `plan-for: … (sha256:…)` equal to the signed
+spec, non-hollow reasons), the two-vote LLM judge checks substance, and `bones build` refuses
+without it, re-hashes it, re-checks its `spec-sha256` against the signed spec (a re-signed spec
+stales the plan), and hands it to loop.sh with `-P`. The builder writes deviations to
+`.loop/plan-deviations.md`, which the stage-6 conformance report must cite.
+
+## Artifact contracts (2.0)
+
+`contracts/<name>.sh <files…>` — exit 0, or exit 1 with one line naming the missing/bad field.
+`council` (stage 4: `council-verdict:`; ≥2 `voice: … — NN/100` with ≥1 `finding:`, or
+`second-pass-critique:` + `risk-triggers:` + ≥3 findings; `dissent:`), `plan`, `conformance`
+(stage 6: first line `conformance: <spec> (sha256:…)`; every `AC-nn: MATCHES|DRIFTED|MISSING —
+evidence: <path[:line]>` or `test: <id>`; id parity with the signed spec; zero
+DRIFTED/MISSING; mandatory `plan-deviations: none|<path>`), `review` (stage 6: `findings:`,
+`F-nn [must-fix|should|nit]:` lines, every must-fix `resolved:`, or `must-fix: none found`;
+`security-gate: triggered|not-triggered — <reason>`), `staging` (stage 7: record with
+`staging-url`, `data: fresh|seeded`, `tests: PASS (<n> passed, 0 failed)`, `e2e: PASS`,
+`click-control: PASS <shot>`, `competitor-read`, `screenshot-sha256` + a real PNG/JPEG/WEBP
+≥ 640×400 and ≥ 10 KB), `smoke` (8b). Hollow-but-well-formed artifacts are refused
+(placeholder evidence, TBD reasons, identical evidence on every line, all-black screenshots,
+reason-less security lines). A stage-4 record with verdict REVISE/KILL is accepted as
+evidence but `next` refuses until a BUILD record exists. Residual risks of the whole design
+are listed in the repo README (R1–R7) — they are disclosed, not papered over.
 
 ## Going backward is normal
 

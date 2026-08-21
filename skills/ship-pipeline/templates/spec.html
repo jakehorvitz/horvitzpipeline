@@ -60,6 +60,7 @@
   </table>
 
   <h2>9. Acceptance rubric</h2>
+  <p class="status">Every acceptance row carries an id <code>AC-nn</code> (AC-01, AC-02, …). The plan artifact maps every id to a step and the stage-6 conformance report marks every id MATCHES/DRIFTED/MISSING — contracts check the id sets for parity, so ids are mandatory.</p>
   <p>Build is accepted when the loop rubric ({{RUBRIC_NAME}}) scores ≥ {{PASS_THRESHOLD}}%, e2e is green, and the click-control test passes. After the loop exits green, the 5.5 spec-conformance check re-reads this spec item by item (MATCHES / DRIFTED / MISSING) before review sign-off.</p>
   <ul>{{ACCEPTANCE_CRITERIA_LIST}}</ul>
 

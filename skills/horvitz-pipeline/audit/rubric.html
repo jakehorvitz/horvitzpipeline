@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>bones-pipeline audit rubric — 2026-08-07</title>
+<style>
+body{font-family:-apple-system,sans-serif;max-width:860px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid #ccc;padding:.45rem .6rem;text-align:left;font-size:.92rem}
+th{background:#f2f2f2}
+.pass{background:#e7f6e7}.fail{background:#fbe9e9}.na{background:#eee;color:#888}
+.dim{color:#666;font-size:.85rem}
+</style></head><body>
+<h1>bones-pipeline audit — scorecard</h1>
+<p class="dim">Goal: 9.5/10. Binding gate = <code>audit/audit.sh</code> exit code: PASS iff ≥95% of points AND
+zero HARD-check failures. Scored 2026-08-07. Cross-model review (codex) triaged in
+<code>review-latest.md</code>; raw truth per run in <code>accept-run-*.log</code> (source-state sha stamps included).</p>
+
+<h2>Result: baseline 5.50/10 (FAIL) → final 10.00/10 (PASS, 1050/1050, zero hard fails) in 4 iterations</h2>
+
+<table>
+<tr><th>ID</th><th>Check</th><th>Pts</th><th>Baseline (run 1)</th><th>Final (run 4)</th></tr>
+<tr><td>A1</td><td>bones.sh + bones-guard.sh parse clean (bash -n) [HARD]</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>A2</td><td>Guard registered as PreToolUse hook (jq-verified) [HARD]</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>A3</td><td>Guard hash pin matches live guard [HARD]</td><td>50</td><td class="fail">FAIL — pipeline WEDGED (stale pre-v2 pin)</td><td class="pass">PASS — via new corpus-verified guard-repin</td></tr>
+<tr><td>A4</td><td>bones selftest: full bypass corpus BLOCKS [HARD]</td><td>100</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>A5</td><td>bones doctor consistent on live dogfood state [HARD]</td><td>50</td><td class="fail">FAIL — died on guard integrity</td><td class="pass">PASS</td></tr>
+<tr><td>B1</td><td>references/brains.md covers all 5 brains, paths live</td><td>100</td><td class="fail">FAIL — file did not exist</td><td class="pass">PASS</td></tr>
+<tr><td>B2</td><td>bones SKILL.md routes to brains + reference file</td><td>50</td><td class="fail">FAIL — zero brain mentions</td><td class="pass">PASS</td></tr>
+<tr><td>B3</td><td>Stage-1 brief: recon consults memory + brain vaults</td><td>75</td><td class="fail">FAIL</td><td class="pass">PASS</td></tr>
+<tr><td>B4</td><td>Stage-10 brief: learnings written BACK to memory/brains</td><td>75</td><td class="fail">FAIL</td><td class="pass">PASS</td></tr>
+<tr><td>B5</td><td>Stage-1 evidence check ENFORCES brains recon (validate_evidence)</td><td>50</td><td class="na">n/a (added by review)</td><td class="pass">PASS</td></tr>
+<tr><td>C1</td><td>Owner-gate verbatim-quote protocol documented</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>C2</td><td>Evidence enforcement (stages 1,3,6,7) documented</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>C3</td><td>LLM substance check wired in bones.sh</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>C4</td><td>7-day operate clock wired in bones.sh</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>D1</td><td>All 10 stage requirement briefs present</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>D2</td><td>Non-code ops mapping documented</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>D3</td><td>Audit scorecard committed alongside the skill</td><td>50</td><td class="pass">PASS</td><td class="pass">PASS</td></tr>
+<tr><td>E1</td><td>Cross-model review triaged, VERDICT: CLEAN [HARD]</td><td>50</td><td class="fail">FAIL — no review yet</td><td class="pass">PASS — codex, 12 findings triaged</td></tr>
+</table>
+
+<h2>Anti-requirements (held every iteration)</h2>
+<ul>
+<li>No writes to the live <code>.bones</code> audit trail except via sanctioned bones.sh commands (guard-repin journaled itself).</li>
+<li>No gate stamped or approved — the dogfood run stays at stage 5 with its build gate untouched.</li>
+<li>No enforcement weakened — all changes additive; stage-1 evidence validation got STRICTER (brains recon now required).</li>
+<li><code>bones-guard.sh</code> byte-untouched (hash 53a29e68… before and after, per accept-run stamps).</li>
+</ul>
+
+<h2>Known residual (owner-blocked, predates audit)</h2>
+<p>Guard hook matcher is Bash-only: Write/Edit tools bypass .bones tamper protection. Fix needs Jake's
+call (widening the matcher affects all in-flight projects); asked 2026-08-04, unanswered. See
+<code>review-latest.md</code> residuals.</p>
+</body></html>

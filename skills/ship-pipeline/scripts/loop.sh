@@ -63,7 +63,8 @@ REVIEW_TIMEOUT=180
 die() { printf 'loop.sh: %s\n' "$1" >&2; exit 1; }
 
 ALLOW_UNVERIFIED=0
-while getopts ":t:s:r:a:m:p:M:c:R:B:Uh" opt; do
+PLAN=""
+while getopts ":t:s:r:a:m:p:P:M:c:R:B:Uh" opt; do
   case "$opt" in
     t) TARGET="$OPTARG" ;;
     s) SPEC="$OPTARG" ;;
@@ -71,6 +72,7 @@ while getopts ":t:s:r:a:m:p:M:c:R:B:Uh" opt; do
     a) ANTI="$OPTARG" ;;
     m) MAX_ITERS="$OPTARG" ;;
     p) THRESHOLD="$OPTARG" ;;
+    P) PLAN="$OPTARG" ;;
     M) MODEL="$OPTARG" ;;
     c) ACCEPT_CMD="$OPTARG" ;;
     R) REVIEWER="$OPTARG" ;;
@@ -90,6 +92,7 @@ done
 [ -d "$TARGET" ] || die "target dir not found: $TARGET"
 [ -f "$RUBRIC" ] || die "rubric not found: $RUBRIC"
 [ -n "$SPEC" ] && [ ! -f "$SPEC" ] && die "spec not found: $SPEC"
+[ -n "$PLAN" ] && [ ! -f "$PLAN" ] && die "plan not found: $PLAN"
 case "$MAX_ITERS" in (''|*[!0-9]*) die "max-iters must be an integer" ;; esac
 case "$THRESHOLD" in (''|*[!0-9]*) die "threshold must be an integer" ;; esac
 case "$REVIEWER" in (auto|codex|gemini|prime) ;; (*) die "reviewer must be auto|codex|gemini|prime" ;; esac
@@ -296,6 +299,7 @@ while [ "$i" -le "$MAX_ITERS" ]; do
   # 1) implement + 2) write advisory acceptance.json + advisory score.json
   build_prompt="You are in ship-pipeline build loop iteration $i/$MAX_ITERS.
 Spec (source of acceptance criteria): ${SPEC:-(infer from repo + .loop logs)}. Advisory quality rubric: $RUBRIC.
+${PLAN:+Plan (architecture, order, test seams — FOLLOW IT; write any deviation to .loop/plan-deviations.md as \"path — what — why\"): $PLAN}
 $anti_block
 Do: (1) implement the single highest-value next increment toward the spec; keep changes focused.
 (2) Run the project's real tests/build, and verify each acceptance criterion from the spec by an

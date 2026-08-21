@@ -6,7 +6,12 @@
 # never touches pipeline state. accept-run-N.log files preserve run history.
 set -u
 
-SKILL="$HOME/.claude/skills/horvitz-pipeline"
+LIVE_SKILL="$HOME/.claude/skills/horvitz-pipeline"
+# BONES_AUDIT_SKILL points the audit at a non-installed tree (e.g. a 2.0 build checkout); the guard
+# pin check and the doctor run then use the LIVE guard, because the live runs are pinned to it until
+# fleet.sh repin at promote.
+SKILL="${BONES_AUDIT_SKILL:-$LIVE_SKILL}"
+NONLIVE=0; [ "$SKILL" != "$LIVE_SKILL" ] && NONLIVE=1
 SHIP="$HOME/.claude/skills/ship-pipeline"
 BONES="$SKILL/scripts/bones.sh"
 GUARD="$SKILL/scripts/bones-guard.sh"
@@ -42,13 +47,21 @@ else
 fi
 check 50 1 A2 "guard registered as a PreToolUse hook in settings.json" $a2
 
-pin="$(head -1 "$SKILL/.bones/guard.sha256" 2>/dev/null | awk '{print $1}')"
-cur="$(shasum -a 256 "$GUARD" 2>/dev/null | awk '{print $1}')"
-[ -n "$pin" ] && [ "$pin" = "$cur" ]; check 50 1 A3 "guard hash pin matches live guard (no tamper)" $?
+if [ "$NONLIVE" -eq 1 ]; then
+  printf 'SKIP A3  (non-live tree: the guard pin is re-established per run by fleet.sh repin at promote)\n'
+else
+  pin="$(head -1 "$SKILL/.bones/guard.sha256" 2>/dev/null | awk '{print $1}')"
+  cur="$(shasum -a 256 "$GUARD" 2>/dev/null | awk '{print $1}')"
+  [ -n "$pin" ] && [ "$pin" = "$cur" ]; check 50 1 A3 "guard hash pin matches live guard (no tamper)" $?
+fi
 
 ( cd "$SKILL" && bash "$BONES" selftest ) > "$SKILL/audit/selftest-latest.log" 2>&1; check 100 1 A4 "bones selftest: full bypass corpus BLOCKS" $?
 
-( cd "$SKILL" && bash "$BONES" doctor ) > "$SKILL/audit/doctor-latest.log" 2>&1; check 50 1 A5 "bones doctor consistent on live dogfood state" $?
+if [ "$NONLIVE" -eq 1 ]; then
+  ( cd "$SKILL" && BONES_GUARD_SH="$LIVE_SKILL/scripts/bones-guard.sh" bash "$BONES" doctor ) > "$SKILL/audit/doctor-latest.log" 2>&1; check 50 1 A5 "bones doctor (2.0 code) consistent on the live run state that gates it" $?
+else
+  ( cd "$SKILL" && bash "$BONES" doctor ) > "$SKILL/audit/doctor-latest.log" 2>&1; check 50 1 A5 "bones doctor consistent on live dogfood state" $?
+fi
 
 # ---------- B. Brain integration (350) ----------
 b1=1
@@ -86,6 +99,16 @@ briefs=$(awk '/^STAGE_BRIEF=\(/,/^\)/' "$BONES" | grep -c '^  "')
 [ "$briefs" -ge 10 ]; check 50 0 D1 "all 10 stage requirement briefs present ($briefs found)" $?
 grep -q 'Non-code' "$SKILL/SKILL.md"; check 50 0 D2 "non-code ops mapping documented" $?
 [ -f "$SKILL/audit/rubric.html" ]; check 50 0 D3 "audit scorecard committed alongside the skill" $?
+
+# ---------- F. 2.0 contracts, stage-8 split, owner-auth, plan (350) ----------
+f1=0; for c in council conformance review staging smoke plan; do [ -x "$SKILL/contracts/$c.sh" ] && bash -n "$SKILL/contracts/$c.sh" 2>/dev/null || f1=1; done
+check 50 1 F1 "contracts/ ships six executable validators that parse" $f1
+for c in contracts promote-split owner-auth plan-artifact upgrade; do
+  out="$(cd "$SKILL" && bash "$BONES" selftest --only "$c" 2>&1)"; rc=$?
+  printf '%s\n' "$out" >> "$SKILL/audit/selftest-latest.log"
+  [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qE "^$c PASS"; check 50 1 "F-$c" "bones selftest --only $c PASS" $?
+done
+grep -q '8a' "$SKILL/SKILL.md" && grep -q 'bones confirm' "$SKILL/SKILL.md" && grep -q 'bones plan' "$SKILL/SKILL.md" && grep -q 'owner-setup' "$SKILL/SKILL.md"; check 50 0 F7 "SKILL.md documents 8a/8b, confirm, plan, owner-setup" $?
 
 # ---------- E. Cross-model review (50, HARD) ----------
 rev="$SKILL/audit/review-latest.md"
