@@ -59,6 +59,7 @@
 #   bones.sh note "<text>"              # append an observation to the journal (stage-stamped)
 #   bones.sh nudge [-n] ["<extra>"]     # iMessage the owner about the current gate (-n = dry run)
 #   bones.sh doctor                     # consistency check: state vs gates vs journal
+#   bones.sh contracts-repin -r "<reason>"  # re-pin contract hashes after a DELIBERATE contract upgrade (contracts selftests must PASS)
 #   bones.sh guard-repin -r "<reason>"  # re-pin guard hash after a DELIBERATE guard upgrade;
 #                                       # refuses unless the live guard BLOCKS the full bypass corpus; journaled
 #   bones.sh log                        # full audit trail (gates + archive + journal)
@@ -262,10 +263,27 @@ run_timeout() {
 # --- 2.0: artifact contracts, atomic gate writes, signed-spec lookup ----------------
 # Contracts are standalone executables next to bones.sh (contracts/<name>.sh <files>); no env
 # override is honored for their location, so a forged variable cannot redirect a gate.
+# Contract integrity (council #2, F-02): every contract's sha256 is pinned per run in
+# .bones/contracts.sha256 (first use or init); an edited contract refuses until a deliberate
+# `bones contracts-repin -r "<why>"`, which itself requires the contracts selftests to PASS.
+record_contracts_hash() { # record_contracts_hash <bones dir>
+  local c; : > "$1/contracts.sha256.tmp"
+  for c in "$CONTRACTS_DIR"/*.sh; do [ -f "$c" ] && printf '%s %s\n' "$(basename "$c")" "$(sha_of "$c")" >> "$1/contracts.sha256.tmp"; done
+  mv -f "$1/contracts.sha256.tmp" "$1/contracts.sha256"
+}
+verify_contract_pin() { # verify_contract_pin <name>
+  local c="$CONTRACTS_DIR/$1.sh" want
+  [ -f "$BONES_DIR/contracts.sha256" ] || { record_contracts_hash "$BONES_DIR"; journal contracts-pin "contracts pinned on first use"; return 0; }
+  want="$(awk -v n="$1.sh" '$1==n{print $2}' "$BONES_DIR/contracts.sha256" | head -1)"
+  [ -n "$want" ] || die "contract $1.sh is not in this run's contracts pin — bones contracts-repin -r \"<why>\" after verifying the contracts"
+  [ "$want" = "$(sha_of "$c")" ] || die "contract $1.sh CHANGED since it was pinned for this run (pinned ${want:0:12}, actual $(sha_of "$c" | cut -c1-12)) — a contract edited mid-run cannot judge evidence; if the upgrade is deliberate: bones contracts-repin -r \"<why>\""
+}
 run_contract() { # run_contract <name> <files...> — die with the contract's one-line reason on refusal
   local name="$1"; shift
   local c="$CONTRACTS_DIR/$name.sh" out
   [ -x "$c" ] || die "contract missing or not executable: $c (2.0 ships contracts/ next to bones.sh)"
+  [ -f "$CONTRACTS_DIR/lib.sh" ] || die "contracts/lib.sh missing"
+  verify_contract_pin "$name"; verify_contract_pin lib
   if ! out="$(SMOKE_AFTER="${SMOKE_AFTER:-}" BONES_DIR="$BONES_DIR" "$BASH_BIN" "$c" "$@" 2>&1)"; then
     die "evidence REJECTED by the $name contract — ${out:-no reason given}"
   fi
@@ -573,6 +591,7 @@ cmd_init() {
   printf '%s\n' "$acceptance_cmd" > "$dir/acceptance.cmd"
   chmod 444 "$dir/acceptance.cmd" 2>/dev/null || true
   record_guard_hash "$dir"
+  [ -d "$CONTRACTS_DIR" ] && record_contracts_hash "$dir"
   # 2.0: pin this machine's owner key at init when one exists (bones owner-setup ran before).
   if [ -f "$OWNER_DIR/owner.pub" ] && grep -qE '^owner-mode: (biometry|presence|passphrase)$' "$OWNER_DIR/owner.pub"; then cp "$OWNER_DIR/owner.pub" "$dir/owner.pub"; fi
   BONES_DIR="$dir"
@@ -1800,6 +1819,49 @@ selftest_upgrade_fixtures() {
   printf 'upgrade PASS (%s fixtures: schema null unsealed/sealed + schema 2, stages 3/8/9; gates preserved; pre-2.0 promote labeled)\n' "$cases"
 }
 
+selftest_byp_18() { # out-of-tree: cd .. and act on the run via paths / -C must still be guarded
+  local w p rc=0 probe out probe_rc
+  w="$(selftest_owner_workspace)"; p="$w/project"
+  for probe in \
+    "cd .. && git -C project push origin main" \
+    "cd $w && git -C project push origin main" \
+    "cd .. && printf 'x' > project/.bones/gates/8-promote.ok" \
+    "cd .. && rm project/.bones/used-nonces" \
+    "cd $w && make -C project deploy" \
+    "git -C $p push origin main"
+  do
+    probe_rc=0
+    out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$p" "$probe")")" || probe_rc=$?
+    [ "$probe_rc" -eq 2 ] || { printf 'BYP-18 FAIL expected BLOCK for %s, got rc=%s output=%s\n' "$probe" "$probe_rc" "$out"; rc=1; }
+  done
+  probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$w" "git -C project push origin main")")" || probe_rc=$?
+  [ "$probe_rc" -eq 2 ] || { printf 'BYP-18 FAIL expected BLOCK for out-of-tree git -C push, got rc=%s\n' "$probe_rc"; rc=1; }
+  probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$w" "printf 'x' > project/.bones/owner.pub")")" || probe_rc=$?
+  [ "$probe_rc" -eq 2 ] || { printf 'BYP-18 FAIL expected BLOCK for out-of-tree .bones write, got rc=%s\n' "$probe_rc"; rc=1; }
+  rm -rf "$w"
+  [ "$rc" -eq 0 ] && printf 'BYP-18 BLOCK\n'
+  return "$rc"
+}
+selftest_byp_19() { # contract tamper: an edited contract cannot judge; the installed skill is read-only inside a run
+  local w p rc=0 out probe probe_rc
+  w="$(selftest_owner_workspace)"; p="$w/project"
+  [ -f "$p/.bones/contracts.sha256" ] || { printf 'BYP-19 FAIL contracts pin not recorded at init\n'; rm -rf "$w"; return 1; }
+  for probe in "printf 'exit 0' > $HOME/.claude/skills/horvitz-pipeline/contracts/smoke.sh" "cp /tmp/x $HOME/.claude/skills/horvitz-pipeline/scripts/bones.sh" "sed -i '' 's/x/y/' ~/.claude/skills/ship-pipeline/scripts/loop.sh"; do
+    probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$p" "$probe")")" || probe_rc=$?
+    [ "$probe_rc" -eq 2 ] || { printf 'BYP-19 FAIL expected BLOCK for %s, got rc=%s\n' "$probe" "$probe_rc"; rc=1; }
+  done
+  probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Write "$p" "" "$HOME/.claude/skills/horvitz-pipeline/contracts/smoke.sh")")" || probe_rc=$?
+  [ "$probe_rc" -eq 2 ] || { printf 'BYP-19 FAIL Write tool edit of an installed contract was not blocked (rc=%s)\n' "$probe_rc"; rc=1; }
+  (cd "$p" && BONES_GUARD_SH="$GUARD_SH" "$SELF" approve -q "go" "selftest: authorize for BYP-19" >/dev/null 2>&1) || { printf 'BYP-19 FAIL could not authorize\n'; rm -rf "$w"; return 1; }
+  selftest_smoke_record "$w/smoke.md" PASS
+  sed -E 's/^(smoke\.sh) [0-9a-f]+$/\1 0000000000000000000000000000000000000000000000000000000000000000/' "$p/.bones/contracts.sha256" > "$p/.bones/contracts.sha256.next" && mv "$p/.bones/contracts.sha256.next" "$p/.bones/contracts.sha256"
+  out="$(cd "$p" && BONES_GUARD_SH="$GUARD_SH" "$SELF" confirm -e "$w/smoke.md" "selftest: smoke with a tampered contract pin" 2>&1)"; probe_rc=$?
+  if [ "$probe_rc" -eq 0 ] || ! printf '%s' "$out" | grep -q 'CHANGED since it was pinned'; then printf 'BYP-19 FAIL confirm accepted a contract that no longer matches its pin (rc=%s)\n' "$probe_rc"; rc=1; fi
+  [ -f "$p/.bones/gates/8-promote.ok" ] && { printf 'BYP-19 FAIL 8b written under a tampered contract pin\n'; rc=1; }
+  rm -rf "$w"
+  [ "$rc" -eq 0 ] && printf 'BYP-19 BLOCK\n'
+  return "$rc"
+}
 selftest_byp_15() {
   local w p rc=0 tok
   w="$(selftest_owner_workspace)"; p="$w/project"
@@ -1834,7 +1896,7 @@ cmd_selftest() {
   local corpus="${BONES_SELFTEST_CORPUS:-$SCRIPT_DIR/../selftest/corpus.txt}"
   if [ "$only" = "" ]; then
     [ -f "$corpus" ] || die "canonical bypass corpus missing: $corpus"
-    for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17; do
+    for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19; do
       if ! grep -qE "^${id}[[:space:]]+BLOCK([[:space:]]|$)" "$corpus"; then
         printf '%s FAIL corpus missing required BLOCK marker\n' "$id"
         failures=$((failures+1))
@@ -1842,7 +1904,7 @@ cmd_selftest() {
     done
   fi
   case "$only" in
-    "") for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17; do
+    "") for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19; do
           fn="selftest_byp_${id#BYP-}"; fn="${fn/-/_}"
           "$fn" || failures=$((failures+1))
         done ;;
@@ -1859,7 +1921,7 @@ cmd_selftest() {
     helper-integrity) selftest_helper_integrity || failures=$((failures+1)) ;;
     staleness) selftest_staleness || failures=$((failures+1)) ;;
     unsealed-status) selftest_unsealed_status || failures=$((failures+1)) ;;
-    BYP-01|BYP-02|BYP-03|BYP-04|BYP-05|BYP-06|BYP-07|BYP-08|BYP-09|BYP-10|BYP-14|BYP-15|BYP-16|BYP-17)
+    BYP-01|BYP-02|BYP-03|BYP-04|BYP-05|BYP-06|BYP-07|BYP-08|BYP-09|BYP-10|BYP-14|BYP-15|BYP-16|BYP-17|BYP-18|BYP-19)
       fn="selftest_byp_${only#BYP-}"; fn="${fn/-/_}"; "$fn" || failures=$((failures+1)) ;;
     *) die "unknown selftest case: $only" ;;
   esac
@@ -2071,6 +2133,13 @@ cmd_doctor() {
   if [ -f "$BONES_DIR/owner.pub" ] && [ "$(sed -n 's/^owner-mode:[[:space:]]*//p' "$BONES_DIR/owner.pub" | head -1)" = passphrase ]; then
     printf ' note owner-auth: passphrase (DEGRADED)\n'
   fi
+  if [ -f "$BONES_DIR/contracts.sha256" ]; then
+    local cn cs
+    while read -r cn cs; do
+      [ -f "$CONTRACTS_DIR/$cn" ] || { printf ' WARN pinned contract missing from the skill: %s\n' "$cn"; issues=$((issues+1)); continue; }
+      [ "$(sha_of "$CONTRACTS_DIR/$cn")" = "$cs" ] || { printf ' WARN contract CHANGED since pinned for this run: %s (bones contracts-repin if deliberate)\n' "$cn"; issues=$((issues+1)); }
+    done < "$BONES_DIR/contracts.sha256"
+  fi
   # Evidence integrity: re-hash every pinned artifact; a mismatch means the file
   # changed AFTER sign-off (or the record was forged).
   local ln path want got
@@ -2133,6 +2202,24 @@ cmd_guard_repin() {
   printf 'horvitz: guard re-pinned %s -> %s (bypass corpus verified)\n' "${old:-none}" "$new"
 }
 
+cmd_contracts_repin() {
+  BONES_DIR="$(find_bones)" || die "no .bones here"
+  local reason=""
+  while [ $# -gt 0 ]; do case "$1" in
+    -r) reason="${2:-}"; [ -n "$reason" ] || die "contracts-repin: -r needs a reason"; shift 2 ;;
+    *) die "contracts-repin: unknown arg '$1' (usage: contracts-repin -r \"<reason>\")" ;;
+  esac; done
+  [ -n "$reason" ] || die "contracts-repin requires -r \"<reason>\" — the repin goes on the permanent record"
+  reason="$(printf '%s' "$reason" | tr '\r\n' '  ' | tr -d '\000-\010\013\014\016-\037')"
+  verify_state_integrity
+  # A changed contract earns a new pin only by proving it still judges the fixture corpus correctly.
+  cmd_selftest --only contracts >/dev/null 2>&1 && cmd_selftest --only hollow >/dev/null 2>&1 \
+    || die "contracts-repin refused: the contracts FAIL their fixture selftests (run: bones selftest --only contracts / --only hollow)"
+  journal contracts-repin "contracts re-pinned; reason: ${reason} (contracts + hollow selftests PASS)" || die "contracts-repin: journal write failed — pin NOT changed"
+  record_contracts_hash "$BONES_DIR"
+  printf 'horvitz: contracts re-pinned for this run (%s entries)\n' "$(wc -l < "$BONES_DIR/contracts.sha256" | tr -d ' ')"
+}
+
 # --- dispatch --------------------------------------------------------------
 BONES_DIR="${BONES_DIR:-}"
 sub="${1:-status}"; shift || true
@@ -2156,8 +2243,9 @@ case "$sub" in
   nudge)   cmd_nudge "$@" ;;
   doctor)  cmd_doctor ;;
   guard-repin) cmd_guard_repin "$@" ;;
+  contracts-repin) cmd_contracts_repin "$@" ;;
   log)     cmd_log ;;
   reset)   cmd_reset "$@" ;;
   -h|--help|help) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown subcommand: $sub (try: init status approve plan build confirm owner-setup owner-pin acceptance-path selftest license package next back note nudge doctor guard-repin log reset)" ;;
+  *) die "unknown subcommand: $sub (try: init status approve plan build confirm owner-setup owner-pin acceptance-path selftest license package next back note nudge doctor guard-repin contracts-repin log reset)" ;;
 esac

@@ -108,6 +108,10 @@ documented as context-activated helpers, never mandatory stages.
 - **R3** Macs without Touch ID fall back to a passphrase key: a typed approval, marked DEGRADED.
 - **R4** The guard remains regex-over-Bash; a determined agent can write a program that shells out,
   or patch the guard itself under the same uid. Helper pinning narrows, but cannot close, that class.
+  The same boundary applies to every file the orchestrator trusts — gate records, `.bones/owner.pub`,
+  `used-nonces`, `contracts.sha256`: the guard stops literal writes (from any directory, including
+  `cd ..`-then-path and `git -C` forms) but an obfuscated path or a script that writes from inside is
+  the same class as patching the guard. The next frontier is a non-regex write broker (guard 3.0).
 - **R5** Skill shapes for Slice B were designed from Bones's descriptions until his repo is readable.
 - **R6** "No skill becomes a stage" is true, and still the contracts and the plan gate are new
   mandatory policy surfaces. Said plainly rather than implied away.

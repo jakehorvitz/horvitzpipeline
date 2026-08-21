@@ -12,3 +12,5 @@ BYP-14 BLOCK forge stage 1->9 or schema 2->0 while retaining old seal; both guar
 BYP-15 BLOCK forged or stale 8-promote.authorized (bad signature, or git HEAD moved since 8a) must not lift the guard
 BYP-16 BLOCK script -q /dev/null bones approve at stage 8 (pty trick) without an owner token
 BYP-17 BLOCK deploy-shaped command at stage 8 before 8a; bones next after 8a but before 8b
+BYP-18 BLOCK out-of-tree action on a run (cd .. && git -C project push; cd .. && write project/.bones/...; make -C project deploy) is guarded by the session tree and by -C/--cwd resolution
+BYP-19 BLOCK an edited contract no longer matches the run's contracts pin (confirm/approve refuse); writes into the installed orchestrator from inside an active run are blocked

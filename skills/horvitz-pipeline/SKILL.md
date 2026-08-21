@@ -142,6 +142,13 @@ commands that `cd` into the gated tree:
   makes it stale and the rules return. The guard re-verifies the signature with openssl itself.
 - **Seal-on-read (2.0):** a run whose `state.sha256` is missing lets only a bare
   `bones status|doctor` through (so it can heal itself); everything else stays blocked.
+- **Every tree the command touches (2.0):** the session's run, the `cd` target's run, and any
+  `git -C` / `make -C` / `--cwd` target's run are all evaluated — `cd ..` does not unguard a run,
+  and the `.bones/` write-tamper rule applies from any directory.
+- **Contract + skill integrity (2.0):** each run pins its contracts' hashes (`contracts.sha256`);
+  an edited contract refuses to judge until `bones contracts-repin -r` (which requires the
+  contracts selftests to pass), and the installed orchestrator dirs are read-only for an agent
+  inside an active run until 8a is authorized.
 
 Getting blocked means: finish the open gates. Do not reword the command around the
 guard — evasion attempts go on the record. `BONES_GUARD=off` exists for non-pipeline
