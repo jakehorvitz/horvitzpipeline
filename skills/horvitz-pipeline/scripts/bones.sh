@@ -37,6 +37,7 @@
 #                         # without -c, pins `false` so the build gate fails closed
 #                         # STRICT by default; -S = soft owner gates
 #   bones.sh status
+#   bones.sh artifacts                  # list every pinned artifact (path, sha, VERIFIED/CHANGED/MISSING)
 #   bones.sh approve [-q "<verbatim owner quote>"] [-e <evidence_file>]... "<note>"
 #   bones.sh build  [loop.sh args...]   # stage 5 only: runs ship-pipeline loop.sh
 #                         # -B auto|codex|prime picks the builder agent (default auto:
@@ -78,6 +79,9 @@ SECRET_SCANNER="${BONES_SECRET_SCANNER:-$SCRIPT_DIR/bones-secret-scan.pl}"
 # 2.0: contracts live next to bones.sh and the owner key/helper live per machine in ~/.bones-owner.
 # Neither location takes an env override — a forged variable must not redirect a gate.
 CONTRACTS_DIR="$SCRIPT_DIR/../contracts"
+# 2.0 Slice B: stage policy lives in composable skills under the skills parent dir (installed:
+# ~/.claude/skills; in-repo: <repo>/skills). status reads a stage's rich brief from its owning skill.
+SKILLS_DIR="${BONES_SKILLS_DIR:-$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)}"
 OWNER_DIR="$HOME/.bones-owner"
 OWNER_AUTH_SRC="$SCRIPT_DIR/bones-owner-auth.swift"
 OWNER_TOKEN_WINDOW=600
@@ -101,18 +105,32 @@ STAGE_TITLES=(
 # gate type per stage: owner | agent | auto | step (see header)
 STAGE_GATE=(agent owner owner agent auto agent agent owner step owner)
 # what satisfies each stage — printed by `status` so no sub-part silently drops out
-STAGE_BRIEF=(
-  "superpowers brainstorm + recon (Jake's brains FIRST — mem-search persistent memory always, plus the matching vaults: AI-Brain / hormozi-vault / video-brain / Brain, per ship-pipeline/references/brains.md — then deep-research / web-scraping / context7 / graphify), THEN the 7-dimension prompt interrogation (ship-pipeline/references/prompt-interrogation.md): band every dimension covered/partial/missing, ask Jake only the gaps, fold answers back in, and SCORE each round (covered=full weight, partial=half, missing=0; deferred excluded) — below 85/100 the interrogation is not done, keep asking. Record 'score: NN/100' in the record. UI build? deliver the clickable HTML mockup too. Deliverable: tightened prompt + scored interrogation record — approve with -e <interrogation file>."
-  "the brutal <=30-min check: painful job + for whom, existing 80% tool, unfair advantage, 1-day version + cuts, 7-day success metric, kill condition, maintenance cost. Record scope/metric/kill-condition — they feed stages 3 and 10."
-  "HTML spec from ship-pipeline/templates/spec.html incl. non-goals + EXECUTABLE acceptance checklist + API validation: live-curl every external API AT SPEC TIME (request + confirmed response captured in the spec) or state 'no external APIs' explicitly — an API first tested mid-build ships bugs. UI build? link the stage-1 mockup. Jake grills it; revise until he signs off. Approve with -e <spec.html>."
-  "claude-council if stakes warrant (multiple architectures, irreversible data/schema, auth/payments/PII, cost risk); else a second-pass spec critique. Verdict + dissent recorded into the spec. Rejection => bones back -s 3. Record format (contracts/council.sh): council-verdict: BUILD|REVISE|KILL; >=2 lines 'voice: <name> — NN/100' with >=1 'finding:' (or second-pass-critique: + risk-triggers: + >=3 findings); dissent:. Approve with -e <council record> (first). A REVISE/KILL record is accepted as evidence but next refuses until a BUILD record exists."
-  "FIRST pin the plan: bones plan -e docs/plan.md \"<note>\" (architecture, file-level changes path — create|edit|delete — why, numbered order, test seams, acceptance map of every AC-nn in the signed spec; contracts/plan.sh + LLM judge) — build refuses without it and hands it to the builder with -P; the builder writes deviations to .loop/plan-deviations.md. THEN run \`bones build -c \"<the command pinned at init>\" -s <spec.html> [-r rubric] [-B auto|codex|prime]\` — bones rejects a different command and independently re-runs the pinned command after the loop; both must exit 0; rubric score is advisory. -B picks the builder agent (default auto: codex, else prime-agent); whichever builds, the pinned re-run is still the gate."
-  "FIRST the stage-5.5 spec-conformance check: re-read the SIGNED stage-3 spec and mark every scope item / anti-requirement / acceptance criterion MATCHES / DRIFTED / MISSING with evidence (long loops drift — the acceptance command only checks what it encodes); any drift => bones back -s 5 or a spec amendment Jake re-signs. THEN cross-model adversarial review of the diff vs spec + anti-requirements; risk-triggered /security-review if auth/payments/PII/uploads/webhooks/admin/multi-tenant/public-write. Findings => bones back -s 5. Approve with -e <conformance report> -e <review file>. Contract formats: conformance = first line 'conformance: <signed spec> (sha256:…)', one 'AC-nn: MATCHES|DRIFTED|MISSING — evidence: <path[:line]>' per id of the signed spec, zero DRIFTED/MISSING, 'plan-deviations: none|<path>'; review = 'findings:' + 'F-nn [must-fix|should|nit]:' lines (every must-fix carries 'resolved:', or 'must-fix: none found') + 'security-gate: triggered|not-triggered — <reason>'."
-  "staging with FRESH/SEEDED data (never real): test suite -> migration/seed check -> click-control happy path (screenshot) -> full e2e -> competitor-analysis pass. ALL green before promote. Approve with -e <staging record> -e <screenshot>: record fields staging-url, data: fresh|seeded, tests: PASS (<n> passed, 0 failed), e2e: PASS, click-control: PASS <screenshot>, competitor-read, screenshot-sha256; the screenshot must be a real PNG/JPEG/WEBP >= 640x400 and >= 10 KB (contracts/staging.sh)."
-  "TWO PHASES. 8a authorize: Jake's explicit go as bones approve -q \"<his words>\" (prompts his Touch ID; the token is bound to the current HEAD and lifts the guard for promote-shaped commands while HEAD stays put). Then deploy + IMMEDIATE production smoke test of the core happy path. 8b confirm: bones confirm -e <smoke record> \"<note>\" (smoke-target / smoke-result: PASS / smoke-at later than 8a; contracts/smoke.sh) — or bones confirm --failed -e <record> after a rollback. Only bones next afterwards starts the 7-day operate clock."
-  "present to Jake: what shipped, acceptance checklist status, competitor read, live URL."
-  "instrument (activation, core-success, errors, latency + one qualitative channel); within 7 days check the stage-2 metric and record Jake's call: double-down / park / kill. Then write learnings BACK to the brains per ship-pipeline/references/brains.md: new/updated persistent-memory facts (+ MEMORY.md index line), vault notes, stale memories corrected — a run that taught nothing is journaled as such."
+STAGE_SKILL=("" goalify specify reviewify implementify reviewify "" "" "" goalify)
+# One-line orchestrator notes; the RICH per-stage policy lives in the owning skill's `## Produces`
+# block (Bones 2.0: keep the orchestrator thin). `status` prints the skill block when present.
+STAGE_NOTE=(
+  "brainstorm + the 7-dimension prompt interrogation (score >=85); brains recon FIRST (mem-search persistent memory + matching vaults, ship-pipeline/references/brains.md). Approve -e <interrogation file>."
+  "the brutal <=30-min kill-or-commit check; record scope / 7-day metric / kill-condition (they feed stages 3 and 10)."
+  "the signed HTML spec: non-goals + an executable AC-nn acceptance checklist + spec-time API validation. Jake signs it. Approve -e <spec.html>."
+  "council if stakes warrant, else a second-pass critique; verdict BUILD|REVISE|KILL + dissent (contracts/council.sh). Approve -e <council record>."
+  "pin the plan (bones plan -e docs/plan.md), then bones build -c <the command pinned at init>; the independent pinned-acceptance re-run is the gate."
+  "the stage-5.5 conformance report vs the SIGNED spec (zero DRIFTED/MISSING) + a cross-model adversarial review. Approve -e <conformance> -e <review>."
+  "staging on FRESH/SEEDED data (never real): tests -> click-control screenshot -> e2e -> competitor read. Approve -e <staging record> -e <screenshot>."
+  "8a authorize (bones approve -q \"<his words>\", Touch ID, HEAD-bound) -> deploy + production smoke -> 8b confirm (bones confirm -e <smoke record>)."
+  "present to Jake: what shipped, acceptance-checklist status, competitor read, live URL."
+  "within 7 days make the double-down / park / kill call against the stage-2 metric, then write learnings back to the brains (memory + vaults)."
 )
+stage_brief() { # stage_brief <n> — rich brief from the owning skill's ## Produces, else the note
+  local idx=$(( $1 - 1 )) note skill prod f
+  note="${STAGE_NOTE[$idx]}"; skill="${STAGE_SKILL[$idx]}"
+  [ -n "$skill" ] || { printf '%s' "$note"; return; }
+  f="$SKILLS_DIR/$skill/SKILL.md"
+  if [ -f "$f" ]; then
+    prod="$(awk '/^## Produces/{p=1;next} /^## /{p=0} p' "$f" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+    [ -n "$prod" ] && { printf '%s  [%s] %s' "$note" "$skill" "$prod"; return; }
+  fi
+  printf '%s  [%s: see %s/SKILL.md]' "$note" "$skill" "$skill"
+}
 NSTAGES=${#STAGE_KEYS[@]}
 
 die() { printf 'horvitz: %s\n' "$1" >&2; exit 1; }
@@ -656,7 +674,7 @@ cmd_status() {
     printf '\n'
   fi
   local gt="${STAGE_GATE[$((cur-1))]}"
-  printf 'stage %s requires: %s\n\n' "$cur" "${STAGE_BRIEF[$((cur-1))]}" | fold -s -w 96
+  printf 'stage %s requires: %s\n\n' "$cur" "$(stage_brief "$cur")" | fold -s -w 96
   if gate_satisfied "$cur"; then
     printf 'current gate satisfied ✓ — run `bones next` to advance.\n'
   else
@@ -1890,6 +1908,70 @@ selftest_byp_17() {
   rm -rf "$w"; printf 'BYP-17 BLOCK\n'
 }
 
+cmd_artifacts() {
+  BONES_DIR="$(find_bones)" || die "no .bones here — run 'bones init' first"
+  require_stage >/dev/null
+  local target; target="$(state_get target)"
+  printf '== Horvitz artifacts: %s ==\n' "$(state_get name)"
+  local any=0 gf st ln path want status
+  for gf in "$BONES_DIR"/gates/*.ok "$BONES_DIR"/gates/5-build-loop.plan "$BONES_DIR"/gates/8-promote.authorized; do
+    [ -f "$gf" ] || continue
+    st="$(basename "$gf")"
+    while IFS= read -r ln; do
+      path="$(printf '%s' "$ln" | sed -E 's/^(evidence|plan): (.*) \(sha256:[a-f0-9-]+\)$/\2/')"
+      want="$(printf '%s' "$ln" | sed -E 's/^.*\(sha256:([a-f0-9-]+)\)$/\1/')"
+      path="$(resolve_evidence "$path" "$target")"
+      if [ ! -e "$path" ]; then status=MISSING
+      elif [ "$(sha_of "$path")" = "$want" ]; then status=VERIFIED
+      else status=CHANGED; fi
+      printf '  %-22s %-9s %s\n' "$st" "$status" "$path"
+      any=1
+    done < <(grep -hE '^(evidence|plan): ' "$gf")
+  done
+  [ "$any" -eq 1 ] || printf '  (no pinned artifacts yet)\n'
+}
+
+selftest_thin() {
+  grep -q "STAGE_""BRIEF" "$SELF" && { printf 'thin FAIL the stage-policy array is still present in bones.sh\n'; return 1; }
+  local w out
+  w="$(mktemp -d "${TMPDIR:-/tmp}/bones-thin.XXXXXX")"; mkdir -p "$w/project" "$w/skills/specify"
+  "$SELF" init -t "$w/project" -n selftest -c true -S >/dev/null 2>&1
+  selftest_set_stage "$w/project" 3
+  printf -- '---\nname: specify\ndescription: x\n---\n## Produces\nSENTINEL_PRODUCES_XYZZY marks the spec artifact for this run.\n## Procedure\nx\n' > "$w/skills/specify/SKILL.md"
+  out="$(cd "$w/project" && BONES_SKILLS_DIR="$w/skills" BONES_GUARD_SH="$GUARD_SH" "$SELF" status 2>&1)"
+  printf '%s' "$out" | grep -q 'SENTINEL_PRODUCES_XYZZY' || { printf 'thin FAIL status at stage 3 did not read the specify skill Produces block\n'; rm -rf "$w"; return 1; }
+  selftest_set_stage "$w/project" 4
+  printf 'evidence file\n' > "$w/project/ev.txt"
+  printf '%s | spec | owner | selftest\nevidence: %s (sha256:%s)\n' "$(now)" "$w/project/ev.txt" "$(sha_of "$w/project/ev.txt")" > "$w/project/.bones/gates/3-spec.ok"
+  out="$(cd "$w/project" && BONES_GUARD_SH="$GUARD_SH" "$SELF" artifacts 2>&1)"
+  printf '%s' "$out" | grep -q 'VERIFIED' || { printf 'thin FAIL artifacts did not report VERIFIED for an intact evidence file\n'; rm -rf "$w"; return 1; }
+  printf 'mutated\n' >> "$w/project/ev.txt"
+  out="$(cd "$w/project" && BONES_GUARD_SH="$GUARD_SH" "$SELF" artifacts 2>&1)"
+  printf '%s' "$out" | grep -q 'CHANGED' || { printf 'thin FAIL artifacts did not report CHANGED after the evidence file was mutated\n'; rm -rf "$w"; return 1; }
+  rm -rf "$w"
+  printf 'thin PASS (stage-policy array removed from the orchestrator; status reads the owning skill Produces; artifacts reports VERIFIED/CHANGED)\n'
+}
+
+selftest_skills() {
+  local base rc=0 s f h rows
+  base="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
+  for s in specify goalify planify implementify reviewify; do
+    f="$base/$s/SKILL.md"
+    [ -f "$f" ] || { printf 'skills FAIL missing %s\n' "$f"; rc=1; continue; }
+    grep -qE '^name:' "$f" && grep -qE '^description:' "$f" || { printf 'skills FAIL %s front-matter\n' "$s"; rc=1; }
+    for h in '^## Produces' '^## Procedure' '^## Activates'; do grep -qE "$h" "$f" || { printf 'skills FAIL %s lacks %s\n' "$s" "$h"; rc=1; }; done
+  done
+  f="$base/README.md"
+  if [ ! -f "$f" ]; then printf 'skills FAIL skills/README.md missing\n'; rc=1
+  else
+    grep -qiE '\|[[:space:]]*activates' "$f" || { printf 'skills FAIL README has no activation column\n'; rc=1; }
+    rows="$(grep -cE '^\| \*\*[a-z]+\*\* \|' "$f")"
+    [ "$rows" -ge 17 ] || { printf 'skills FAIL README lists %s skill rows, need >=17\n' "$rows"; rc=1; }
+  fi
+  [ "$rc" -eq 0 ] && printf 'skills PASS (five stage-owning skills with Produces/Procedure/Activates; README lists 17 with an activation column)\n'
+  return "$rc"
+}
+
 cmd_selftest() {
   local only="" failures=0 id fn
   if [ "${1:-}" = "--only" ]; then only="${2:-}"; [ -n "$only" ] || die "selftest --only needs a case name"; fi
@@ -1921,6 +2003,8 @@ cmd_selftest() {
     helper-integrity) selftest_helper_integrity || failures=$((failures+1)) ;;
     staleness) selftest_staleness || failures=$((failures+1)) ;;
     unsealed-status) selftest_unsealed_status || failures=$((failures+1)) ;;
+    thin) selftest_thin || failures=$((failures+1)) ;;
+    skills) selftest_skills || failures=$((failures+1)) ;;
     BYP-01|BYP-02|BYP-03|BYP-04|BYP-05|BYP-06|BYP-07|BYP-08|BYP-09|BYP-10|BYP-14|BYP-15|BYP-16|BYP-17|BYP-18|BYP-19)
       fn="selftest_byp_${only#BYP-}"; fn="${fn/-/_}"; "$fn" || failures=$((failures+1)) ;;
     *) die "unknown selftest case: $only" ;;
@@ -2226,6 +2310,7 @@ sub="${1:-status}"; shift || true
 case "$sub" in
   init)    cmd_init "$@" ;;
   status)  cmd_status ;;
+  artifacts) cmd_artifacts ;;
   approve) cmd_approve "$@" ;;
   build)   cmd_build "$@" ;;
   acceptance-path) cmd_acceptance_path ;;
@@ -2247,5 +2332,5 @@ case "$sub" in
   log)     cmd_log ;;
   reset)   cmd_reset "$@" ;;
   -h|--help|help) grep '^#' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "unknown subcommand: $sub (try: init status approve plan build confirm owner-setup owner-pin acceptance-path selftest license package next back note nudge doctor guard-repin contracts-repin log reset)" ;;
+  *) die "unknown subcommand: $sub (try: init status artifacts approve plan build confirm owner-setup owner-pin acceptance-path selftest license package next back note nudge doctor guard-repin contracts-repin log reset)" ;;
 esac

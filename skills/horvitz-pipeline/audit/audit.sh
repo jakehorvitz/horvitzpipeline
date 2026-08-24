@@ -85,10 +85,10 @@ b2=1
 grep -q 'references/brains.md' "$SKILL/SKILL.md" && grep -q 'hormozi-vault' "$SKILL/SKILL.md" && grep -q 'video-brain' "$SKILL/SKILL.md" && grep -q 'AI-Brain' "$SKILL/SKILL.md" && b2=0
 check 50 0 B2 "bones SKILL.md routes to the brains + reference file" $b2
 
-stage1="$(awk '/^STAGE_BRIEF=\(/,/^\)/' "$BONES" | grep -m1 'interrogation')"
+stage1="$(awk '/^STAGE_NOTE=\(/,/^\)/' "$BONES" | grep -m1 'interrogation')"
 printf '%s' "$stage1" | grep -q 'brains.md'; check 75 0 B3 "stage-1 brief: recon consults memory + brain vaults" $?
 
-stage10="$(awk '/^STAGE_BRIEF=\(/,/^\)/' "$BONES" | grep -m1 -i 'double-down')"
+stage10="$(awk '/^STAGE_NOTE=\(/,/^\)/' "$BONES" | grep -m1 -i 'double-down')"
 printf '%s' "$stage10" | grep -qi 'learnings back'; check 75 0 B4 "stage-10 brief: learnings written BACK to memory/brains" $?
 
 grep -q 'no relevant brain' "$BONES"; check 50 0 B5 "stage-1 evidence check ENFORCES brains recon (not just prose)" $?
@@ -100,7 +100,7 @@ grep -q 'BONES_LLM' "$BONES"; check 50 0 C3 "LLM substance check wired in bones.
 grep -q 'operate-due' "$BONES"; check 50 0 C4 "7-day operate clock wired in bones.sh" $?
 
 # ---------- D. Usability (150) ----------
-briefs=$(awk '/^STAGE_BRIEF=\(/,/^\)/' "$BONES" | grep -c '^  "')
+briefs=$(awk '/^STAGE_NOTE=\(/,/^\)/' "$BONES" | grep -c '^  "')
 [ "$briefs" -ge 10 ]; check 50 0 D1 "all 10 stage requirement briefs present ($briefs found)" $?
 grep -q 'Non-code' "$SKILL/SKILL.md"; check 50 0 D2 "non-code ops mapping documented" $?
 [ -f "$SKILL/audit/rubric.html" ]; check 50 0 D3 "audit scorecard committed alongside the skill" $?
