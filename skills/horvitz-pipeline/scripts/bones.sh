@@ -1880,6 +1880,35 @@ selftest_byp_19() { # contract tamper: an edited contract cannot judge; the inst
   [ "$rc" -eq 0 ] && printf 'BYP-19 BLOCK\n'
   return "$rc"
 }
+selftest_byp_20() { # find on the audit trail: the T1 read-only allowlist admitted `find` by name only; its write/exec/delete actions must block
+  local w p rc=0 probe out probe_rc
+  w="$(selftest_workspace)"; p="$w/project"
+  # positive control: a read-only find over .bones/ stays ALLOWED (the fix must not over-block)
+  probe="find $p/.bones -name '*.log'"
+  probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$p" "$probe")")" || probe_rc=$?
+  [ "$probe_rc" -eq 0 ] || { printf 'BYP-20 FAIL expected ALLOW for read-only %s, got rc=%s output=%s\n' "$probe" "$probe_rc" "$out"; rc=1; }
+  for probe in \
+    "find $p/.bones -delete" \
+    "find $p/.bones -name '*.log' -delete" \
+    "find $p/.bones -exec rm {} \\;" \
+    "find $p/.bones -exec rm -rf {} +" \
+    "find $p/.bones -execdir rm {} +" \
+    "find $p/.bones -ok rm {} +" \
+    "find $p/.bones -okdir rm {} +" \
+    "find $p/.bones -fprint $p/.bones/state.json" \
+    "find $p/.bones -fprint0 $p/.bones/state.json" \
+    "find $p/.bones -fprintf $p/.bones/state.json %p" \
+    "find $p/.bones -fls $p/.bones/state.json" \
+    "find $p/.bones '-delete'" \
+    "find .bones -delete"
+  do
+    probe_rc=0; out="$("$BASH_BIN" "$GUARD_SH" 2>&1 <<<"$(guard_json Bash "$p" "$probe")")" || probe_rc=$?
+    [ "$probe_rc" -eq 2 ] || { printf 'BYP-20 FAIL expected BLOCK for %s, got rc=%s output=%s\n' "$probe" "$probe_rc" "$out"; rc=1; }
+  done
+  rm -rf "$w"
+  [ "$rc" -eq 0 ] && printf 'BYP-20 BLOCK\n'
+  return "$rc"
+}
 selftest_byp_15() {
   local w p rc=0 tok
   w="$(selftest_owner_workspace)"; p="$w/project"
@@ -1978,7 +2007,7 @@ cmd_selftest() {
   local corpus="${BONES_SELFTEST_CORPUS:-$SCRIPT_DIR/../selftest/corpus.txt}"
   if [ "$only" = "" ]; then
     [ -f "$corpus" ] || die "canonical bypass corpus missing: $corpus"
-    for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19; do
+    for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19 BYP-20; do
       if ! grep -qE "^${id}[[:space:]]+BLOCK([[:space:]]|$)" "$corpus"; then
         printf '%s FAIL corpus missing required BLOCK marker\n' "$id"
         failures=$((failures+1))
@@ -1986,7 +2015,7 @@ cmd_selftest() {
     done
   fi
   case "$only" in
-    "") for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19; do
+    "") for id in BYP-01 BYP-02 BYP-03 BYP-04 BYP-05 BYP-06 BYP-07 BYP-08 BYP-09 BYP-10 BYP-14 BYP-15 BYP-16 BYP-17 BYP-18 BYP-19 BYP-20; do
           fn="selftest_byp_${id#BYP-}"; fn="${fn/-/_}"
           "$fn" || failures=$((failures+1))
         done ;;
@@ -2005,7 +2034,7 @@ cmd_selftest() {
     unsealed-status) selftest_unsealed_status || failures=$((failures+1)) ;;
     thin) selftest_thin || failures=$((failures+1)) ;;
     skills) selftest_skills || failures=$((failures+1)) ;;
-    BYP-01|BYP-02|BYP-03|BYP-04|BYP-05|BYP-06|BYP-07|BYP-08|BYP-09|BYP-10|BYP-14|BYP-15|BYP-16|BYP-17|BYP-18|BYP-19)
+    BYP-01|BYP-02|BYP-03|BYP-04|BYP-05|BYP-06|BYP-07|BYP-08|BYP-09|BYP-10|BYP-14|BYP-15|BYP-16|BYP-17|BYP-18|BYP-19|BYP-20)
       fn="selftest_byp_${only#BYP-}"; fn="${fn/-/_}"; "$fn" || failures=$((failures+1)) ;;
     *) die "unknown selftest case: $only" ;;
   esac
